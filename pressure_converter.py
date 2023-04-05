@@ -35,6 +35,9 @@ pagesoup = soup(htmldata, "html.parser")
 print("HTML data: ")
 print(pagesoup)
 
+#pressure = <div class="pull-left" id="current_conditions_detail"> ... <b>Barometer</b> ...
+#altitude = <div id="about_forecast"> ... 
+
 
 #TODO calculate the local barometric pressure from the input lat+lon
 #get station pressure and the elevation from the webpage
