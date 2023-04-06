@@ -27,6 +27,7 @@
 #TODO define a check webpage function
 #1) check that BeutifulSoup can parse the page (might not happen if above inputs don't output anything)
 
+#START OF PROGRAM
 #imports
 import urllib.request as ul
 from bs4 import BeautifulSoup as soup
@@ -155,3 +156,4 @@ ctp = round(((273.2 + temp_round) / (273.2 + 20.0)) * (760.0 / baro_lat_lon), 3)
 print("Your Ctp for the given temperature of " + str(temp_raw) + "°C and pressure of " +
       str(baro_lat_lon) + "mmHg is: ")
 print(str(ctp))
+#END OF PROGRAM
