@@ -14,6 +14,8 @@
 #
 #
 #For the coders out there:
+#TODO output in other units of pressure (HPa, etc)
+#
 #TODO take input temperature from user to calculate Ctp instead of hard coding
 #
 #TODO take additional input temperature and input pressure to print a comparison report
