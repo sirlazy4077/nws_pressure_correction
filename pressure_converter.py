@@ -144,6 +144,18 @@ print("Here is your local barometric pressure provided in mmHg,\n for the given 
 print(str(baro_lat_lon) + " mmHg")
 print()
 
+print("And here is your pressure in different units: ")
+print(str(round(baro_lat_lon,2)) + " Tor, kPa")
+baro_lat_lon_inHG = baro_lat_lon * 0.03937
+print(str(round(baro_lat_lon_inHG,3)) + " inHG")
+baro_lat_lon_hPa = baro_lat_lon * 1.33322
+print(str(round(baro_lat_lon_hPa,2)) + " hPa, mbar")
+baro_lat_lon_bar = baro_lat_lon_hPa * 0.001
+print(str(round(baro_lat_lon_bar,4)) + " bar")
+baro_lat_lon_Pa = baro_lat_lon_hPa * 133.322
+print(str(round(baro_lat_lon_Pa,1)) + " Pascal")
+print()
+
 
 #now calculate Ctp from the found pressure and the given vault temperature
 #TODO comment out when user input is defined
