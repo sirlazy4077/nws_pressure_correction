@@ -16,6 +16,8 @@
 #
 #For the coders out there:
 #
+#TODO take input for repeating the pressure pull
+#
 #TODO take additional input temperature and input pressure to print a comparison report
 #
 #TODO is there a method to do this worldwide? another website which provides pressure and altitude from lat and lon?
@@ -56,40 +58,41 @@ def get_input(y_n_question):
 
 #PART 1/3: Get pressure from lat and lon, corrected for altitude
 
-#test_url_raw = 'https://forecast.weather.gov/MapClick.php?lat=40.3100&lon=-75.1305' #DEBUG
-#hard_coded_lat = 40.3071 #DEBUG
-#hard_coded_lon = -75.1477 #DEBUG
-
-#find your lat and lon here:
-print("Find your lat and lon via this website, or another of your choice: ")
-print('https://www.latlong.net/')
-print()
-
-input_lat = round(float(input("What is your latitude? (ex: 40.3071): ")),4)
-input_lon = round(float(input("What is your longitude? (ex: -75.1477): ")),4)
-
-#lat = hard_coded_lat #DEBUG
-#lon = hard_coded_lon #DEBUG
-lat = input_lat
-lon = input_lon
-
-lat_round = round(lat, 3)
-lon_round = round(lon, 3)
-
-
-#the url which will generate a NWS page for the given lat and lon to pull from
-#TODO have this pass through a check function to make sure the lat and lon make a NWS page that exists
-url_head = 'https://forecast.weather.gov/MapClick.php?lat='
-
-url_compiled = url_head + str(lat_round) + "&lon=" + str(lon_round)
-
-print("url compiled from given lat and lon, click to verify pressure and altitude/elevation: ")
-print(url_compiled)
-print("Pressure is found near the top of the page, under Current Conditions at, next to the bold text Barometer (reported in inHG)")
-print("Elevation is found towards the bottom right, below the map, next to the bold text Point Forecast (reported in feet)")
-print()
-
+#TODO take user input to re-run this part
 try:
+      #test_url_raw = 'https://forecast.weather.gov/MapClick.php?lat=40.3100&lon=-75.1305' #DEBUG
+      #hard_coded_lat = 40.3071 #DEBUG
+      #hard_coded_lon = -75.1477 #DEBUG
+
+      #find your lat and lon here:
+      print("Find your lat and lon via this website, or another of your choice: ")
+      print('https://www.latlong.net/')
+      print()
+
+      input_lat = round(float(input("What is your latitude? (ex: 40.3071): ")),4)
+      input_lon = round(float(input("What is your longitude? (ex: -75.1477): ")),4)
+
+      #lat = hard_coded_lat #DEBUG
+      #lon = hard_coded_lon #DEBUG
+      lat = input_lat
+      lon = input_lon
+
+      lat_round = round(lat, 3)
+      lon_round = round(lon, 3)
+
+
+      #the url which will generate a NWS page for the given lat and lon to pull from
+      url_head = 'https://forecast.weather.gov/MapClick.php?lat='
+
+      url_compiled = url_head + str(lat_round) + "&lon=" + str(lon_round)
+
+      print("url compiled from given lat and lon, click to verify pressure and altitude/elevation: ")
+      print(url_compiled)
+      print("Pressure is found near the top of the page, under Current Conditions at, next to the bold text Barometer (reported in inHG)")
+      print("Elevation is found towards the bottom right, below the map, next to the bold text Point Forecast (reported in feet)")
+      print()
+
+      
       #BeutifulSoup to extract the barometric pressure and the altitude
       url = url_compiled
       req = ul.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -170,18 +173,7 @@ except IndexError:
 #PART 2/3: Calculate CTP
 
 #now calculate Ctp from the found pressure and the given vault temperature
-input_to_ctp = "Would you like to continue to Ctp with the above pressure? (y/n): "
-
-#check input is appropriate or if user wants to exit
-flag_to_ctp = False;
-while(not flag_to_ctp):
-      get_input(input_to_ctp)
-      if (input_to_ctp):
-            flag_to_ctp = True;
-      elif (not input_to_ctp):
-            sys.exit(0)
-      else:
-            continue
+#TODO take user input to re-run this part
 
 #hard_coded_temp = 20.0 #DEBUG
 input_temp = round(float(input("What is your temperature, in Celsius? (ex: 20.0): ")),4)
@@ -198,5 +190,5 @@ print(str(ctp))
 
 #TODO PART 3/3: Intercomparison
 
-
+#TODO take user input to re-run the program
 #END OF PROGRAM
