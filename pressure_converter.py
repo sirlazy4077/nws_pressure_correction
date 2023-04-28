@@ -1,4 +1,5 @@
 #START OF HEADER
+#
 #This program is designed to output altitude-corrected barometric pressure calculated from the pressure
 #of the local NWS nearest to the given latitude and longitude using the user's estimated elevation
 #the local NWS barometric pressure and estimated elevation are found by passing the user's lat and lon
@@ -11,18 +12,21 @@
 #hard_coded_lon
 #hard_coded_temp
 #
-#Cheers! -Kevin Risolo, MMP, DABR (kprisolo@gmail.com)
+#Cheers! -Kevin Risolo, MMP, DABR (kprisolo@gmail.com / sirlazy4077)
 #
 #
 #For the coders out there:
 #
-#TODO take input for repeating the pressure pull
+#TODO take input for repeating the pressure pull, and for changing Ctp inputs
 #
-#TODO take additional input temperature and input pressure to print a comparison report
+#TODO take additional input temperature and input pressure to print a comparison report to the pulled data
 #
 #TODO is there a method to do this worldwide? another website which provides pressure and altitude from lat and lon?
 #
+#TODO make a main function, and have each part as a function, and maybe with a return from them for other uses outside this?
+#
 #END OF HEADER
+
 
 #START OF PROGRAM
 
@@ -37,8 +41,10 @@ def get_input(y_n_question):
       input_user = input(y_n_question)
       
       #return yes as true, no as false
+      #strip of whitespace, apply lower case, take only the first letter after that
       yes_no_bool = False;
-      input_cleaned = input_user.lower().strip()
+      input_striplower = input_user.lower().strip()
+      input_cleaned = input_striplower[:1]
       
       #check input is appropriate
       flag_loop = False;
