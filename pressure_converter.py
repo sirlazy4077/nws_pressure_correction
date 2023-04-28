@@ -17,34 +17,31 @@
 #
 #For the coders out there:
 #
-#TODO refactor in the get_num_input helper function
-#
 #TODO is there a method to do this worldwide? another website which provides pressure and altitude from lat and lon?
 #
 #END OF HEADER
 
 
 #START OF PROGRAM
-
+#
 #imports
-import sys
 import urllib.request as ul
 from bs4 import BeautifulSoup as soup
 
 
 #helper functions to take user input, one for y/n, and one for numbers
 def get_input(y_n_question):
-      input_user = input(y_n_question)
-      
       #return yes as true, no as false
-      #strip of whitespace, apply lower case, take only the first letter after that
       yes_no_bool = False
-      input_striplower = input_user.lower().strip()
-      input_cleaned = input_striplower[:1]
-      
+
       #check input y/n response is appropriate
       flag_loop = True
       while(flag_loop):
+            #strip of whitespace, apply lower case, take only the first letter after that
+            input_user = input(y_n_question)
+            input_striplower = input_user.lower().strip()
+            input_cleaned = input_striplower[:1]
+            
             if (input_cleaned == 'y'):
                   flag_loop = False;
                   yes_no_bool = True;
@@ -55,6 +52,7 @@ def get_input(y_n_question):
                   print("Please type a valid input of 'y' or 'n'")
             
       return yes_no_bool
+# get_input("testing y/n question: ") #DEBUG
 
 def get_num_input(num_input):
       #return a clean number input
@@ -62,21 +60,19 @@ def get_num_input(num_input):
       
       #check input number is appropriate
       flag_loop = True
-      
       while(flag_loop):
-            input_num = input(num_input)
+            input_num = input(num_input).strip()
             try:
                   float(input_num)
                   
             except:
                   print("Please enter a valid number (example format: 000.00)")
-                  break
             
             else:
                   flag_loop = False
                   return_num = float(input_num)
-            
-      return return_num
+                  return return_num
+# get_num_input("what number to test: ") #DEBUG
 
 
 #the main program
@@ -96,8 +92,8 @@ while(program_flag):
                   print('https://www.latlong.net/')
                   print()
 
-                  input_lat = round(float(input("What is your latitude? (ex: 40.3071): ")),4)
-                  input_lon = round(float(input("What is your longitude? (ex: -75.1477): ")),4)
+                  input_lat = round(get_num_input("What is your latitude? (ex: 40.3071): "),4)
+                  input_lon = round(get_num_input("What is your longitude? (ex: -75.1477): "),4)
 
                   #lat = hard_coded_lat #DEBUG
                   #lon = hard_coded_lon #DEBUG
@@ -217,7 +213,7 @@ while(program_flag):
       ctp_flag = True
       while(ctp_flag):
             #hard_coded_temp = 20.0 #DEBUG
-            input_temp = input("What is your temperature, in Celsius? (ex: 20.0): ")
+            input_temp = get_num_input("What is your temperature, in Celsius? (ex: 20.0): ")
             temp_round = round(float(input_temp),2)
             #temp_raw = hard_coded_temp #DEBUG
             temp_raw = temp_round
@@ -247,10 +243,10 @@ while(program_flag):
       #PART 3/3: Intercomparison
       intercomp_flag = True
       while(intercomp_flag):
-            intercomp_temp = input("What is your temperature for intercomparison, in Celsius? (ex: 20.0): ")
+            intercomp_temp = get_num_input("What is your temperature for intercomparison, in Celsius? (ex: 20.0): ")
             intercomp_temp_round = round(float(intercomp_temp),2)
 
-            intercomp_baro = input("What is your pressure for intercomparison, in mmHg? (ex: 760.0): ")
+            intercomp_baro = get_num_input("What is your pressure for intercomparison, in mmHg? (ex: 760.0): ")
             intercomp_baro_round = round(float(intercomp_baro),2)
 
             intercomp_temps_abs = round((intercomp_temp_round - temp_round),2)
@@ -280,7 +276,5 @@ while(program_flag):
             program_flag = False
             print("Thank you for using the BaroMe! Goodbye")
             print()
-
-
-
+#
 #END OF PROGRAM
