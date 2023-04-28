@@ -6,12 +6,6 @@
 #to a generated url for the NWS, which are pulled via BeutifulSoup4 into the program
 #This url is provided to the user for them to verify the input data
 #
-#if user input is not functioning, change the following values to run the program on your local computer:
-#(i.e. use ctrl+F to find and update the corresponding variable value currently set)
-#hard_coded_lat
-#hard_coded_lon
-#hard_coded_temp
-#
 #Cheers! -Kevin Risolo, MMP, DABR (kprisolo@gmail.com / sirlazy4077)
 #
 #
