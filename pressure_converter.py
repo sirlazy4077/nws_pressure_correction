@@ -11,8 +11,6 @@
 #
 #For the coders out there:
 #
-#TODO package the Pressure, Ctp, and Intecomparison into functions
-#
 #TODO is there a method to do this worldwide? another website which provides pressure and altitude from lat and lon?
 #
 #END OF HEADER
