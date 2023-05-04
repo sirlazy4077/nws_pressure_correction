@@ -71,11 +71,12 @@ def get_num_input(num_input):
 # get_num_input("what number to test: ") #DEBUG
 
 
-#the main program
-program_flag = True
-while(program_flag):
+#the main functions to pull pressure from input lat/lon and return altitude corrected pressure in mmHg,
+# and to calc Ctp from that value,
+# and to do intercomparsion with that value
 
-      #PART 1/3: Get pressure from lat and lon provided, corrected for altitude
+#PART 1/3: Get pressure from lat and lon provided, corrected for altitude
+def pressure():
       pressure_flag = True
       while(pressure_flag):
             try:
@@ -170,16 +171,12 @@ while(program_flag):
                   #conversions from mmHg to other pressure units commonly seen
                   print("And here is your pressure in different units: ")
                   print(str(round(baro_lat_lon,2)) + " Tor, kPa")
-                  print()
                   baro_lat_lon_inHG = baro_lat_lon * 0.03937
                   print(str(round(baro_lat_lon_inHG,3)) + " inHG")
-                  print()
                   baro_lat_lon_hPa = baro_lat_lon * 1.33322
                   print(str(round(baro_lat_lon_hPa,2)) + " hPa, mbar")
-                  print()
                   baro_lat_lon_bar = baro_lat_lon_hPa * 0.001
                   print(str(round(baro_lat_lon_bar,4)) + " bar")
-                  print()
                   baro_lat_lon_Pa = baro_lat_lon * 133.322
                   print(str(round(baro_lat_lon_Pa,1)) + " Pascal")
                   print()
@@ -197,15 +194,11 @@ while(program_flag):
                   continue
             else:
                   pressure_flag = False
+      return baro_lat_lon
 
-      #ask the user if they want to continue to a Ctp correction
-      continue_to_ctp_question = "Would you like to do a Ctp factor for the pulled pressure? "
-      continue_to_ctp_input = get_input(continue_to_ctp_question)
-      
-      if(not continue_to_ctp_input):
-            break
 
-      #PART 2/3: Calculate CTP from the found pressure and the given vault temperature
+#PART 2/3: Calculate CTP from the found pressure and the given vault temperature
+def ctp(baro_lat_lon):
       ctp_flag = True
       while(ctp_flag):
             #hard_coded_temp = 20.0 #DEBUG
@@ -227,16 +220,11 @@ while(program_flag):
                   continue
             else:
                   ctp_flag = False
+      return ctp
 
 
-      #ask the user if they want to continue to an intercomparison
-      continue_to_inter_question = "Would you like to do an intercomparison for the pulled pressure and input temp? "
-      continue_to_inter_input = get_input(continue_to_inter_question)
-      
-      if((not continue_to_inter_input) or (not continue_to_ctp_input)):
-            break
-
-      #PART 3/3: Intercomparison
+#PART 3/3: Intercomparison
+def intercomparison(baro_lat_lon):
       intercomp_flag = True
       while(intercomp_flag):
             intercomp_temp = get_num_input("What is your temperature for intercomparison, in Celsius? (ex: 20.0): ")
@@ -262,15 +250,47 @@ while(program_flag):
                   continue
             else:
                   intercomp_flag = False
-      
-      #ask user if they want to rerun the program
-      program_question = "Would you like to rerun the program? (y/n): "
-      program_input = get_input(program_question)
-      if (program_input):
-            continue
-      else:
-            program_flag = False
-            print("Thank you for using the BaroMe! Goodbye")
-            print()
+      return (intercomp_baro_abs, intercomp_baro_percent, intercomp_temps_abs, intercomp_temps_percent)      
+
+#FIXME fix the loops to get out of the functions
+def main():
+      program_flag = True
+      while(program_flag):
+            #run the pressure pull and convert function
+            pressure()
+            baro_lat_lon = pressure()
+
+            #ask the user if they want to continue to a Ctp correction
+            continue_to_ctp_question = "Would you like to do a Ctp factor for the pulled pressure? "
+            continue_to_ctp_input = get_input(continue_to_ctp_question)
+            if(not continue_to_ctp_input):
+                  break
+            
+            #else continue to run Ctp function
+            ctp(baro_lat_lon)
+            
+            #ask the user if they want to continue to an intercomparison
+            continue_to_inter_question = "Would you like to do an intercomparison for the pulled pressure and input temp? "
+            continue_to_inter_input = get_input(continue_to_inter_question)
+            if((not continue_to_inter_input) or (not continue_to_ctp_input)):
+                  break
+            
+            #else continue to intercomparison
+            intercomparison(baro_lat_lon)
+
+            #ask user if they want to rerun the program
+            program_question = "Would you like to rerun the program? (y/n): "
+            program_input = get_input(program_question)
+            if (program_input):
+                  continue
+            else:
+                  program_flag = False
+                  print("Thank you for using the BaroMe! Goodbye")
+                  print()
+
+
+
+if __name__=="__main__":
+      main()
 #
 #END OF PROGRAM
