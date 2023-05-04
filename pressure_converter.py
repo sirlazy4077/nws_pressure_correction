@@ -11,6 +11,8 @@
 #
 #For the coders out there:
 #
+#TODO package the Pressure, Ctp, and Intecomparison into functions
+#
 #TODO is there a method to do this worldwide? another website which provides pressure and altitude from lat and lon?
 #
 #END OF HEADER
@@ -178,7 +180,7 @@ while(program_flag):
                   baro_lat_lon_bar = baro_lat_lon_hPa * 0.001
                   print(str(round(baro_lat_lon_bar,4)) + " bar")
                   print()
-                  baro_lat_lon_Pa = baro_lat_lon_hPa * 133.322
+                  baro_lat_lon_Pa = baro_lat_lon * 133.322
                   print(str(round(baro_lat_lon_Pa,1)) + " Pascal")
                   print()
                   
