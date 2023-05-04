@@ -71,22 +71,18 @@ def get_num_input(num_input):
 # get_num_input("what number to test: ") #DEBUG
 
 
-#the main program
-program_flag = True
-while(program_flag):
+#the main functions to pull pressure from input lat/lon and return altitude corrected pressure in mmHg,
+# and to calc Ctp from that value,
+# and to do intercomparsion with that value
 
-      #PART 1/3: Get pressure from lat and lon provided, corrected for altitude
+#PART 1/3: Get pressure from lat and lon provided, corrected for altitude
+def pressure():
       pressure_flag = True
       while(pressure_flag):
             try:
                   #test_url_raw = 'https://forecast.weather.gov/MapClick.php?lat=40.3100&lon=-75.1305' #DEBUG
                   #hard_coded_lat = 40.3071 #DEBUG
                   #hard_coded_lon = -75.1477 #DEBUG
-
-                  #find your lat and lon here:
-                  print("Find your lat and lon via this website, or another of your choice: ")
-                  print('https://www.latlong.net/')
-                  print()
 
                   input_lat = round(get_num_input("What is your latitude? (ex: 40.3071): "),4)
                   input_lon = round(get_num_input("What is your longitude? (ex: -75.1477): "),4)
@@ -170,16 +166,12 @@ while(program_flag):
                   #conversions from mmHg to other pressure units commonly seen
                   print("And here is your pressure in different units: ")
                   print(str(round(baro_lat_lon,2)) + " Tor, kPa")
-                  print()
                   baro_lat_lon_inHG = baro_lat_lon * 0.03937
                   print(str(round(baro_lat_lon_inHG,3)) + " inHG")
-                  print()
                   baro_lat_lon_hPa = baro_lat_lon * 1.33322
                   print(str(round(baro_lat_lon_hPa,2)) + " hPa, mbar")
-                  print()
                   baro_lat_lon_bar = baro_lat_lon_hPa * 0.001
                   print(str(round(baro_lat_lon_bar,4)) + " bar")
-                  print()
                   baro_lat_lon_Pa = baro_lat_lon * 133.322
                   print(str(round(baro_lat_lon_Pa,1)) + " Pascal")
                   print()
@@ -197,15 +189,11 @@ while(program_flag):
                   continue
             else:
                   pressure_flag = False
+      return baro_lat_lon
 
-      #ask the user if they want to continue to a Ctp correction
-      continue_to_ctp_question = "Would you like to do a Ctp factor for the pulled pressure? "
-      continue_to_ctp_input = get_input(continue_to_ctp_question)
-      
-      if(not continue_to_ctp_input):
-            break
 
-      #PART 2/3: Calculate CTP from the found pressure and the given vault temperature
+#PART 2/3: Calculate CTP from the found pressure and the given vault temperature, return the temp entered
+def ctp(baro_lat_lon):
       ctp_flag = True
       while(ctp_flag):
             #hard_coded_temp = 20.0 #DEBUG
@@ -227,16 +215,11 @@ while(program_flag):
                   continue
             else:
                   ctp_flag = False
+      return temp_round
 
 
-      #ask the user if they want to continue to an intercomparison
-      continue_to_inter_question = "Would you like to do an intercomparison for the pulled pressure and input temp? "
-      continue_to_inter_input = get_input(continue_to_inter_question)
-      
-      if((not continue_to_inter_input) or (not continue_to_ctp_input)):
-            break
-
-      #PART 3/3: Intercomparison
+#PART 3/3: Intercomparison, return the intercomparison absolute and percent differences for temp and press
+def intercomparison(baro_lat_lon, temp_round):
       intercomp_flag = True
       while(intercomp_flag):
             intercomp_temp = get_num_input("What is your temperature for intercomparison, in Celsius? (ex: 20.0): ")
@@ -247,30 +230,67 @@ while(program_flag):
 
             intercomp_temps_abs = round((intercomp_temp_round - temp_round),2)
             intercomp_temps_percent = round(((intercomp_temp_round - temp_round)/temp_round)*100,2)
-            print("The absolute difference in temperatures is " + str(intercomp_temps_abs),"\n " + 
-                  "and the percent difference is " + str(intercomp_temps_percent) + "%")
+            intercomp_temps_kelvin = round(((intercomp_temp_round - temp_round)/(temp_round + 273.2))*100,2)
+            print("The absolute difference in temperatures is " + str(intercomp_temps_abs) + "°C" + "\n " + 
+                  "and the percent difference in Celsius is " + str(intercomp_temps_percent) + "%" + "\n " + 
+                  "and the percent difference in Kelvin is " + str(intercomp_temps_kelvin) + "%")
 
             intercomp_baro_abs = round((intercomp_baro_round - baro_lat_lon),2)
             intercomp_baro_percent = round(((intercomp_baro_round - baro_lat_lon)/baro_lat_lon)*100,2)
-            print("The absolute difference in pressures is " + str(intercomp_baro_abs),"\n " + 
+            print("The absolute difference in pressures is " + str(intercomp_baro_abs) + "mmHg" + "\n " + 
                   "and the percent difference is " + str(intercomp_baro_percent) + "%")
             print()
 
-            intercomp_question = "Would you like to go back and change your temperature? (y/n): "
+            intercomp_question = "Would you like to go back and change your temperature or pressure? (y/n): "
             intercomp_input = get_input(intercomp_question)
             if (intercomp_input):
                   continue
             else:
                   intercomp_flag = False
-      
-      #ask user if they want to rerun the program
-      program_question = "Would you like to rerun the program? (y/n): "
-      program_input = get_input(program_question)
-      if (program_input):
-            continue
-      else:
-            program_flag = False
-            print("Thank you for using the BaroMe! Goodbye")
+      return (intercomp_baro_abs, intercomp_baro_percent, intercomp_temps_abs, intercomp_temps_percent)      
+
+
+def main():
+      program_flag = True
+      while(program_flag):
+            #find your lat and lon here:
+            print("Find your lat and lon via this website, or another of your choice: ")
+            print('https://www.latlong.net/')
             print()
+            
+            #run the pressure pull and convert function
+            baro_lat_lon = pressure()
+
+            #ask the user if they want to continue to a Ctp correction
+            continue_to_ctp_question = "Would you like to do a Ctp factor for the pulled pressure? (y/n): "
+            continue_to_ctp_input = get_input(continue_to_ctp_question)
+            if(not continue_to_ctp_input):
+                  break
+            #else continue to run Ctp function
+            else:
+                  temp_round = ctp(baro_lat_lon)
+            
+            #ask the user if they want to continue to an intercomparison
+            continue_to_inter_question = "Would you like to do an intercomparison for the pulled pressure and input temp? (y/n): "
+            continue_to_inter_input = get_input(continue_to_inter_question)
+            if((not continue_to_inter_input) or (not continue_to_ctp_input)):
+                  break
+            #else continue to intercomparison
+            else:
+                  intercomparison(baro_lat_lon, temp_round)
+            
+            #ask user if they want to rerun the program
+            program_question = "Would you like to rerun the program? (y/n): "
+            program_input = get_input(program_question)
+            if (program_input):
+                  continue
+            else:
+                  program_flag = False
+                  print("Thank you for using BaroMe, powered by Penn! Goodbye and go well!")
+                  print()
+
+#comment out below main call if only calling the functions, not using this as a program
+if __name__=="__main__":
+      main()
 #
 #END OF PROGRAM
