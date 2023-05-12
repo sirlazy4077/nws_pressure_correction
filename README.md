@@ -6,4 +6,5 @@ both to get the pressure and to get the altitude at the lat/lon
 
 TODO:
 1) Figure out an international edition?
+    (potentially use this website: https://www.wunderground.com/hourly/39.94,-75.15/date/2023-05-13) 
 2) Make into a webapp for easy use by a clinic
