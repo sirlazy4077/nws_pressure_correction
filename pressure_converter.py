@@ -94,19 +94,27 @@ def pressure():
                   lon_round = round(lon, 3)
 
 
-                  #the url which will generate a NWS page for the given lat and lon to pull from
-                  url_head = 'https://forecast.weather.gov/MapClick.php?lat='
-
-                  url_compiled = url_head + str(lat_round) + "&lon=" + str(lon_round)
+                  #the url which will generate a page for the given lat and lon to pull from
+                  
+                  #NOTE: THE CODE BELOW IS FOR THE NWS
+                  # url_head = 'https://forecast.weather.gov/MapClick.php?lat='
+                  # url_compiled = url_head + str(lat_round) + "&lon=" + str(lon_round)
+                  # print("Pressure is found near the top of the page, under Current Conditions at, next to the bold text Barometer (reported in inHG)")
+                  # print("Elevation is found towards the bottom right, below the map, next to the bold text Point Forecast (reported in feet)")
+                  # THIS CODE ABOVE IS FOR NWS
+                  
+                  
+                  #NOTE: THIS CODE BELOW IS FOR WEATHER UNDERGROUND
+                  url_head = 'https://www.wunderground.com/hourly/'     
+                  url_compiled = url_head + str(lat_round) + "," + str(lon_round)   
+                  # THIS CODE ABOVE IS FOR WEATHER UNDERGROUND
+                  
 
                   print("url compiled from given lat and lon, click to verify pressure and altitude/elevation: ")
                   print(url_compiled)
-                  print("Pressure is found near the top of the page, under Current Conditions at, next to the bold text Barometer (reported in inHG)")
-                  print("Elevation is found towards the bottom right, below the map, next to the bold text Point Forecast (reported in feet)")
                   print()
-
                   
-                  #BeutifulSoup to extract the barometric pressure and the altitude
+                  #BeautifulSoup to extract the barometric pressure and the altitude
                   url = url_compiled
                   req = ul.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
                   client = ul.urlopen(req)
@@ -141,39 +149,56 @@ def pressure():
                   
                   
                   #NOTE: THIS CODE BELOW IS FOR NWS
-                  current_conditions_detail = [i.text for i in pagesoup.find_all(id='current_conditions_detail')]
-                  #pressure_id = current_conditions_detail #DEBUG
-                  #print(current_conditions_detail[0].split('\n\n')) #DEBUG
-                  curr_cond_det_split = current_conditions_detail[0].split('\n\n')
-                  curr_cond_baro_line = curr_cond_det_split[3].split('\n')
-                  curr_cond_baro_line_split = curr_cond_baro_line[2].split(' ')
-                  #This is the barometric pressure of the local NWS station
-                  curr_cond_baro = curr_cond_baro_line_split[0]
-                  baro = curr_cond_baro
+                  # current_conditions_detail = [i.text for i in pagesoup.find_all(id='current_conditions_detail')]
+                  # #pressure_id = current_conditions_detail #DEBUG
+                  # #print(current_conditions_detail[0].split('\n\n')) #DEBUG
+                  # curr_cond_det_split = current_conditions_detail[0].split('\n\n')
+                  # curr_cond_baro_line = curr_cond_det_split[3].split('\n')
+                  # curr_cond_baro_line_split = curr_cond_baro_line[2].split(' ')
+                  # #This is the barometric pressure of the local NWS station
+                  # curr_cond_baro = curr_cond_baro_line_split[0]
+                  # baro = curr_cond_baro
                   
-                  #altitude = <div id="about_forecast">
-                  about_forecast = [i.text for i in pagesoup.find_all(id='about_forecast')]
-                  about_forecast_split = about_forecast[0].split('\n\n')
-                  about_forecast_elev_line = about_forecast_split[1]
-                  about_forecast_elev_split_elev = about_forecast_elev_line.split('(Elev. ')
-                  about_forecast_elev_space = about_forecast_elev_split_elev[1].split(' ')
-                  #This is the altitude of the given lat+lon
-                  about_forecast_elev = about_forecast_elev_space[0]
-                  elev = about_forecast_elev
+                  # #altitude = <div id="about_forecast">
+                  # about_forecast = [i.text for i in pagesoup.find_all(id='about_forecast')]
+                  # about_forecast_split = about_forecast[0].split('\n\n')
+                  # about_forecast_elev_line = about_forecast_split[1]
+                  # about_forecast_elev_split_elev = about_forecast_elev_line.split('(Elev. ')
+                  # about_forecast_elev_space = about_forecast_elev_split_elev[1].split(' ')
+                  # #This is the altitude of the given lat+lon
+                  # about_forecast_elev = about_forecast_elev_space[0]
+                  # elev = about_forecast_elev
                   # THIS CODE ABOVE IS FOR NWS
                   
                   
                   #NOTE: THIS CODE BELOW IS FOR WEATHER UNDERGROUND
-                  
+                  #finding the class with elevation on the WeatherUnderground page
+                  elev_find = pagesoup.find(class_="wx-data ng-star-inserted")
+                  # print(elev_find) #DEBUG
+                  elev_find_text = elev_find.text
+                  # print(elev_find_text) #DEBUG
+                  elev_find_split = elev_find_text.split(' ')
+                  # print(elev_find_split) #DEBUG
+                  elev = elev_find_split[1][:-2].strip()
+                  # print(elev) #DEBUG
+
+                  #finding the class with pressure on the WeatherUnderground page
+                  baro_find = pagesoup.find(class_="test-false wu-unit wu-unit-pressure ng-star-inserted")
+                  # print(baro_find) #DEBUG
+                  baro_find_text = baro_find.text
+                  # print(baro_find_text) #DEBUG
+                  baro_find_split = baro_find_text.split('°')
+                  baro = baro_find_split[0].strip()
+                  # print(baro) #DEBUG
                   # THIS CODE ABOVE IS FOR WEATHER UNDERGROUND
 
 
                   #This code below is common for both, printing the elevation and baro pressure pulled
-                  print("Here is the pulled barometric pressure for the local NWS station: ")
+                  print("Here is the pulled barometric pressure for the local station at above link: ")
                   print(baro + " inHG")
                   print()
 
-                  print("Here is the pulled altitde for the given lat and lon: ")
+                  print("Here is the pulled altitude for the given lat and lon at above link: ")
                   print(elev + " feet")
                   print()
 
