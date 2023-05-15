@@ -35,8 +35,6 @@ pagesoup = soup(htmldata, "html.parser")
 pagetext = pagesoup.get_text()
 # print(pagetext) #DEBUG
 
-#TODO can't really figure out what tags they store this info under...
-
 # print("Tag names: ") #DEBUG
 tags = [tag.name for tag in pagesoup.find_all()]
 # print(tags) #DEBUG
@@ -46,7 +44,7 @@ tags = [tag.name for tag in pagesoup.find_all()]
 #print(pagesoup) #DEBUG
 #Use to find all id tags on the page #DEBUG
 ids = [tag['id'] for tag in pagesoup.select('div[id]')] #DEBUG
-# print("ID Tags: ")
+# print("ID Tags: ") #DEBUG
 # print(ids) #DEBUG
 
 #find all classes
@@ -77,9 +75,9 @@ baro_find_split = baro_find_text.split('°')
 baro = baro_find_split[0].strip()
 print(baro) #DEBUG
 
+#other way to get these values?
 # div_id_elev = "MW_Position1" #Location of the Elevation
 # div_id_baro = "MW_Position3" #Location of the pressure
-
 # about_forecast = [i.text for i in pagesoup.find_all(id= div_id_baro)]
 # current_conditions_detail = [i.text for i in pagesoup.find_all(id= div_id_elev)]
 
