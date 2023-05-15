@@ -115,49 +115,76 @@ def pressure():
 
                   pagesoup = soup(htmldata, "html.parser")
 
-                  #Use to pull a txt file of the html to visually parse #DEBUG
+
+                  #NOTE: The code below is for DEBUG only with what BS4 pulled from the webpage
+                  #Use to find all id tags on the page
+                  # print("Tag names: ") #DEBUG
+                  # tags = [tag.name for tag in pagesoup.find_all()]
+                  # print(tags) #DEBUG
+                  
+                  #Use to pull a txt file of the html to visually parse
                   #print("HTML data: ") #DEBUG
                   #print(pagesoup) #DEBUG
                   #Use to find all id tags on the page #DEBUG
-                  #ids = [tag['id'] for tag in pagesoup.select('div[id]')] #DEBUG
+                  #ids = [tag['id'] for tag in pagesoup.select('div[id]')]
                   #print(ids) #DEBUG
-
+                  
+                  #Use to find all classes on the page
+                  # classes = set()
+                  # for tag in tags:
+                  #       for i in pagesoup.find_all(tag):
+                  #             if i.has_attr("class"):
+                  #                   if len( i['class'] ) != 0:
+                  #                         classes.add(" ".join( i['class']))
+                  # print("Classes: ") #DEBUG
+                  # print(class_list) #DEBUG
+                  
+                  
+                  #NOTE: THIS CODE BELOW IS FOR NWS
                   current_conditions_detail = [i.text for i in pagesoup.find_all(id='current_conditions_detail')]
                   #pressure_id = current_conditions_detail #DEBUG
                   #print(current_conditions_detail[0].split('\n\n')) #DEBUG
-                  
                   curr_cond_det_split = current_conditions_detail[0].split('\n\n')
                   curr_cond_baro_line = curr_cond_det_split[3].split('\n')
                   curr_cond_baro_line_split = curr_cond_baro_line[2].split(' ')
-
                   #This is the barometric pressure of the local NWS station
                   curr_cond_baro = curr_cond_baro_line_split[0]
-                  print("Here is the pulled barometric pressure for the local NWS station: ")
-                  print(curr_cond_baro + " inHG")
-                  print()
-
+                  baro = curr_cond_baro
+                  
                   #altitude = <div id="about_forecast">
                   about_forecast = [i.text for i in pagesoup.find_all(id='about_forecast')]
                   about_forecast_split = about_forecast[0].split('\n\n')
                   about_forecast_elev_line = about_forecast_split[1]
                   about_forecast_elev_split_elev = about_forecast_elev_line.split('(Elev. ')
                   about_forecast_elev_space = about_forecast_elev_split_elev[1].split(' ')
-
                   #This is the altitude of the given lat+lon
                   about_forecast_elev = about_forecast_elev_space[0]
-                  print("Here is the pulled altitde for the given lat and lon: ")
-                  print(about_forecast_elev + " feet")
+                  elev = about_forecast_elev
+                  # THIS CODE ABOVE IS FOR NWS
+                  
+                  
+                  #NOTE: THIS CODE BELOW IS FOR WEATHER UNDERGROUND
+                  
+                  # THIS CODE ABOVE IS FOR WEATHER UNDERGROUND
+
+
+                  #This code below is common for both, printing the elevation and baro pressure pulled
+                  print("Here is the pulled barometric pressure for the local NWS station: ")
+                  print(baro + " inHG")
                   print()
 
+                  print("Here is the pulled altitde for the given lat and lon: ")
+                  print(elev + " feet")
+                  print()
 
                   #calculate the local barometric pressure from the input lat+lon
                   #get station pressure and the elevation from the webpage
                   #do math and get the local barometric pressure =  25.4 * (NWS_pressure - (local_alt_in_FEET/1000))
-                  baro_lat_lon = round(25.4 * (float(curr_cond_baro) - (float(about_forecast_elev)/1000)), 2)
+                  baro_lat_lon = round(25.4 * (float(baro) - (float(elev)/1000)), 2)
                   print("Here is your local barometric pressure provided in mmHg,\n for the given lat " +
                         str(lat_round) + " and lon " + str(lon) + ",\n whose altitude is " +
-                        str(about_forecast_elev) + "feet,\n converted from NWS pressure of " +
-                        str(curr_cond_baro) + "inHg:")
+                        str(elev) + "feet,\n converted from NWS pressure of " +
+                        str(baro) + "inHg:")
                   print(str(baro_lat_lon) + " mmHg")
                   print()
 

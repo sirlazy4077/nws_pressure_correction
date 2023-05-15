@@ -48,12 +48,12 @@ ids = [tag['id'] for tag in pagesoup.select('div[id]')] #DEBUG
 # print(ids) #DEBUG
 
 #find all classes
-class_list = set()
+classes = set()
 for tag in tags:
     for i in pagesoup.find_all(tag):
         if i.has_attr("class"):
             if len( i['class'] ) != 0:
-                class_list.add(" ".join( i['class']))
+                classes.add(" ".join( i['class']))
 # print(class_list)
 
 #finding the class with elevation on the WeatherUnderground page
