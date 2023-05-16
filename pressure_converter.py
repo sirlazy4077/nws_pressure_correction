@@ -11,7 +11,7 @@
 #
 #For the coders out there:
 #
-#TODO is there a method to do this worldwide? another website which provides pressure and altitude from lat and lon?
+#TODO maybe make a function for the nws or wunderground choice
 #
 #END OF HEADER
 
@@ -69,6 +69,113 @@ def get_num_input(num_input):
 # get_num_input("what number to test: ") #DEBUG
 
 
+#NOTE: The code below is for DEBUG only with what BS4 pulled from the webpage
+def soup_check(pagesoup):
+      
+      #Use to find all id tags on the page
+      print("Tag names: ") #DEBUG
+      tags = [tag.name for tag in pagesoup.find_all()]
+      print(tags) #DEBUG
+      
+      #Use to pull a txt file of the html to visually parse
+      print("HTML data: ") #DEBUG
+      print(pagesoup) #DEBUG
+      #Use to find all id tags on the page #DEBUG
+      ids = [tag['id'] for tag in pagesoup.select('div[id]')]
+      print(ids) #DEBUG
+      
+      #Use to find all classes on the page
+      classes = set()
+      for tag in tags:
+            for i in pagesoup.find_all(tag):
+                  if i.has_attr("class"):
+                        if len( i['class'] ) != 0:
+                              classes.add(" ".join( i['class']))
+      print("Classes: ") #DEBUG
+      print(classes) #DEBUG
+
+
+def nws(pagesoup):
+      current_conditions_detail = [i.text for i in pagesoup.find_all(id='current_conditions_detail')]
+      #pressure_id = current_conditions_detail #DEBUG
+      #print(current_conditions_detail[0].split('\n\n')) #DEBUG
+      curr_cond_det_split = current_conditions_detail[0].split('\n\n')
+      curr_cond_baro_line = curr_cond_det_split[3].split('\n')
+      curr_cond_baro_line_split = curr_cond_baro_line[2].split(' ')
+      #This is the barometric pressure of the local NWS station
+      curr_cond_baro = curr_cond_baro_line_split[0]
+      baro = curr_cond_baro
+      # print(baro) #DEBUG
+      
+      #altitude = <div id="about_forecast">
+      about_forecast = [i.text for i in pagesoup.find_all(id='about_forecast')]
+      about_forecast_split = about_forecast[0].split('\n\n')
+      about_forecast_elev_line = about_forecast_split[1]
+      about_forecast_elev_split_elev = about_forecast_elev_line.split('(Elev. ')
+      about_forecast_elev_space = about_forecast_elev_split_elev[1].split(' ')
+      #This is the altitude of the given lat+lon
+      about_forecast_elev = about_forecast_elev_space[0]
+      elev = about_forecast_elev
+      # print(elev) #DEBUG
+      
+      return (baro, elev)
+
+
+def wunderground(pagesoup):
+      #finding the class with pressure on the WeatherUnderground page
+      baro_find = pagesoup.find(class_="test-false wu-unit wu-unit-pressure ng-star-inserted")
+      # print(baro_find) #DEBUG
+      baro_find_text = baro_find.text
+      # print(baro_find_text) #DEBUG
+      baro_find_split = baro_find_text.split('°')
+      baro = baro_find_split[0].strip()
+      # print(baro) #DEBUG
+      
+      #finding the class with elevation on the WeatherUnderground page
+      elev_find = pagesoup.find(class_="wx-data ng-star-inserted")
+      # print(elev_find) #DEBUG
+      elev_find_text = elev_find.text
+      # print(elev_find_text) #DEBUG
+      elev_find_split = elev_find_text.split(' ')
+      # print(elev_find_split) #DEBUG
+      elev = elev_find_split[1][:-2].strip()
+      # print(elev) #DEBUG
+      
+      return (baro, elev)
+
+
+
+def nws_or_wunderground(lat_round, lon_round):
+      nws_or_wunderground_flag = True
+      while (nws_or_wunderground_flag):
+            nws_or_wunderground = get_num_input("Would you like to use the NWS for USA sites or WeatherUnderground for world-wide sites? \n Enter 1 for NWS, 2 for Wunderground: ")
+            if (nws_or_wunderground == int(1)):
+                  print("Here are the details for the NWS for your given lat and lon: ")
+                  url_head = 'https://forecast.weather.gov/MapClick.php?lat='
+                  url_compiled = url_head + str(lat_round) + "&lon=" + str(lon_round)
+                  print("Pressure is found near the top of the page, under Current Conditions at, next to the bold text Barometer (reported in inHG)")
+                  print("Elevation is found towards the bottom right, below the map, next to the bold text Point Forecast (reported in feet)")
+                  print()
+                  
+                  nws_or_wunderground_flag = False
+                  return (1, url_compiled)
+            
+            elif (nws_or_wunderground == int(2)):
+                  print("Here are the details for Weather Underground for your given lat and lon: ")
+                  url_head = 'https://www.wunderground.com/hourly/'     
+                  url_compiled = url_head + str(lat_round) + "," + str(lon_round)
+                  print("Pressure is found near the middle-left of the page (reported in inHG)")
+                  print("Elevation is found towards the top-left (reported in feet)")
+                  print()
+
+                  nws_or_wunderground_flag = False
+                  return (2, url_compiled)
+            
+            else:
+                  print("Please enter a valid input")
+                  print()
+
+
 #the main functions to pull pressure from input lat/lon and return altitude corrected pressure in mmHg,
 # and to calc Ctp from that value,
 # and to do intercomparsion with that value
@@ -94,25 +201,15 @@ def pressure():
                   lon_round = round(lon, 3)
 
 
-                  #the url which will generate a page for the given lat and lon to pull from
+                  #the url which will generate a page for the given lat and lon to pull from, after picking from nws or wunderground              
+                  nws_or_wunderground_return = nws_or_wunderground(lat_round, lon_round)
+                  nws_or_wunderground_choice = nws_or_wunderground_return[0]
+                  url_compiled = nws_or_wunderground_return[1]
                   
-                  #NOTE: THE CODE BELOW IS FOR THE NWS
-                  # url_head = 'https://forecast.weather.gov/MapClick.php?lat='
-                  # url_compiled = url_head + str(lat_round) + "&lon=" + str(lon_round)
-                  # print("Pressure is found near the top of the page, under Current Conditions at, next to the bold text Barometer (reported in inHG)")
-                  # print("Elevation is found towards the bottom right, below the map, next to the bold text Point Forecast (reported in feet)")
-                  # THIS CODE ABOVE IS FOR NWS
-                  
-                  
-                  #NOTE: THIS CODE BELOW IS FOR WEATHER UNDERGROUND
-                  url_head = 'https://www.wunderground.com/hourly/'     
-                  url_compiled = url_head + str(lat_round) + "," + str(lon_round)   
-                  # THIS CODE ABOVE IS FOR WEATHER UNDERGROUND
-                  
-
                   print("url compiled from given lat and lon, click to verify pressure and altitude/elevation: ")
                   print(url_compiled)
                   print()
+                  
                   
                   #BeautifulSoup to extract the barometric pressure and the altitude
                   url = url_compiled
@@ -122,75 +219,17 @@ def pressure():
                   client.close()
 
                   pagesoup = soup(htmldata, "html.parser")
-
-
-                  #NOTE: The code below is for DEBUG only with what BS4 pulled from the webpage
-                  #Use to find all id tags on the page
-                  # print("Tag names: ") #DEBUG
-                  # tags = [tag.name for tag in pagesoup.find_all()]
-                  # print(tags) #DEBUG
-                  
-                  #Use to pull a txt file of the html to visually parse
-                  #print("HTML data: ") #DEBUG
-                  #print(pagesoup) #DEBUG
-                  #Use to find all id tags on the page #DEBUG
-                  #ids = [tag['id'] for tag in pagesoup.select('div[id]')]
-                  #print(ids) #DEBUG
-                  
-                  #Use to find all classes on the page
-                  # classes = set()
-                  # for tag in tags:
-                  #       for i in pagesoup.find_all(tag):
-                  #             if i.has_attr("class"):
-                  #                   if len( i['class'] ) != 0:
-                  #                         classes.add(" ".join( i['class']))
-                  # print("Classes: ") #DEBUG
-                  # print(class_list) #DEBUG
+                  # soup_check(pagesoup) #DEBUG ONLY
                   
                   
-                  #NOTE: THIS CODE BELOW IS FOR NWS
-                  # current_conditions_detail = [i.text for i in pagesoup.find_all(id='current_conditions_detail')]
-                  # #pressure_id = current_conditions_detail #DEBUG
-                  # #print(current_conditions_detail[0].split('\n\n')) #DEBUG
-                  # curr_cond_det_split = current_conditions_detail[0].split('\n\n')
-                  # curr_cond_baro_line = curr_cond_det_split[3].split('\n')
-                  # curr_cond_baro_line_split = curr_cond_baro_line[2].split(' ')
-                  # #This is the barometric pressure of the local NWS station
-                  # curr_cond_baro = curr_cond_baro_line_split[0]
-                  # baro = curr_cond_baro
-                  
-                  # #altitude = <div id="about_forecast">
-                  # about_forecast = [i.text for i in pagesoup.find_all(id='about_forecast')]
-                  # about_forecast_split = about_forecast[0].split('\n\n')
-                  # about_forecast_elev_line = about_forecast_split[1]
-                  # about_forecast_elev_split_elev = about_forecast_elev_line.split('(Elev. ')
-                  # about_forecast_elev_space = about_forecast_elev_split_elev[1].split(' ')
-                  # #This is the altitude of the given lat+lon
-                  # about_forecast_elev = about_forecast_elev_space[0]
-                  # elev = about_forecast_elev
-                  # THIS CODE ABOVE IS FOR NWS
-                  
-                  
-                  #NOTE: THIS CODE BELOW IS FOR WEATHER UNDERGROUND
-                  #finding the class with elevation on the WeatherUnderground page
-                  elev_find = pagesoup.find(class_="wx-data ng-star-inserted")
-                  # print(elev_find) #DEBUG
-                  elev_find_text = elev_find.text
-                  # print(elev_find_text) #DEBUG
-                  elev_find_split = elev_find_text.split(' ')
-                  # print(elev_find_split) #DEBUG
-                  elev = elev_find_split[1][:-2].strip()
-                  # print(elev) #DEBUG
-
-                  #finding the class with pressure on the WeatherUnderground page
-                  baro_find = pagesoup.find(class_="test-false wu-unit wu-unit-pressure ng-star-inserted")
-                  # print(baro_find) #DEBUG
-                  baro_find_text = baro_find.text
-                  # print(baro_find_text) #DEBUG
-                  baro_find_split = baro_find_text.split('°')
-                  baro = baro_find_split[0].strip()
-                  # print(baro) #DEBUG
-                  # THIS CODE ABOVE IS FOR WEATHER UNDERGROUND
+                  if (nws_or_wunderground_choice == 1):
+                        nws_return = nws(pagesoup) 
+                        baro = nws_return[0]
+                        elev = nws_return[1]
+                  elif (nws_or_wunderground_choice == 2):
+                        wunderground_return = wunderground(pagesoup)
+                        baro = wunderground_return[0]
+                        elev = wunderground_return[1]
 
 
                   #This code below is common for both, printing the elevation and baro pressure pulled
@@ -233,7 +272,7 @@ def pressure():
                   print("If inputs are correct, the NWS may be down. Please use alternative means for pressure readings.")
                   print()
             
-            pressure_question = "Would you like to go back and change your lat/lon? (y/n): "
+            pressure_question = "Would you like to go back and change your lat/lon, and/or change between NWS and Weather Underground? (y/n): "
             pressure_input = get_input(pressure_question)
             if (pressure_input):
                   continue
@@ -338,6 +377,7 @@ def main():
                   program_flag = False
                   print("Thank you for using BaroMe, powered by Penn! Goodbye and go well!")
                   print()
+
 
 #comment out below main call if only calling the functions, not using this as a program
 if __name__=="__main__":
