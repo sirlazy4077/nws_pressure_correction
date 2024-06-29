@@ -12,6 +12,8 @@
 #For the coders out there:
 #
 #TODO maybe make a function for the nws or wunderground choice
+#TODO split functions up and make into more of a library?
+#TODO use geopy to get lat lon from address entry?
 #
 #END OF HEADER
 
@@ -21,6 +23,7 @@
 #imports
 import urllib.request as ul
 from bs4 import BeautifulSoup as soup
+from geopy.geocoders import Nominatim
 
 
 #helper functions to take user input, one for y/n, and one for numbers
@@ -340,6 +343,7 @@ def intercomparison(baro_lat_lon, temp_round):
 
 
 def main():
+      app = Nominatim(user_agent="tutorial")
       program_flag = True
       while(program_flag):
             #find your lat and lon here:
