@@ -12,6 +12,8 @@
 #For the coders out there:
 #
 #TODO maybe make a function for the nws or wunderground choice
+#TODO have a function take an address and split it into lat and lon for user
+#TODO make this... cleaner, or at least something capable of being a webapp
 #
 #END OF HEADER
 
