@@ -1,7 +1,8 @@
 # Refactor Plan — BaroMe / nws_pressure_correction
 
 **Status:** proposal only, nothing implemented.
-**Drafted:** 2026-09-08
+**Drafted:** 2026-09-08 · **Revised:** 2026-09-08 (geocoding, elevation,
+barometric formula, Ctp protocol toggle)
 
 ## 1. Goal
 
@@ -14,6 +15,14 @@ thin front ends (CLI + web), and change the user contract to:
 Everything else — latitude/longitude, which weather station, the station's
 elevation, the site's elevation — is resolved for them. Weather Underground is
 the default source for all users, worldwide.
+
+The one deliberate exception to "one input" is the **Ctp reference protocol**
+(§5.4): a two-option toggle, chosen once and remembered, because the software
+must not silently pick a clinical convention on the user's behalf.
+
+**New runtime dependency:** `geopy` (for Nominatim and Photon geocoding).
+`beautifulsoup4` / `soupsieve` are *removed* — the scraping they supported is
+replaced by JSON APIs. Net dependency count goes down.
 
 ---
 
@@ -99,16 +108,26 @@ formula `P_station = P_msl · (1 − 0.0065·h/288.15)^5.25588`, starting from
 | 7000 | 582.17 | 586.41 | −4.25 | +0.73% |
 
 Fine near sea level, drifting to ~0.4% through the elevations where most of the
-US actually lives, and reversing sign above ~6000 ft. Recommendation: compute
-with the barometric formula, and keep the linear result available as a labelled
-cross-check so historical numbers stay reproducible.
+US actually lives, and reversing sign above ~6000 ft.
 
-**(d) Ctp reference temperature — a question, not a defect.**
-[Line 296](pressure_converter.py#L296) uses 20.0 °C and 760.0 mmHg. That matches
-**IAEA TRS-398**. **AAPM TG-51** references 22 °C. The code hard-codes one
-convention with no label. This should become a named, selectable constant with the
-protocol shown in the output, so a user cannot misread which one they got.
-*Flagging for your call — I am not assuming which protocol the clinic runs.*
+**DECIDED — the linear rule of thumb is dropped as the default.** The barometric
+formula (the "Barometric" column above) becomes the sole computation path. The
+linear value will still be computed and shown in the detail panel, clearly
+labelled *"legacy 1 inHg/1000 ft approximation"*, so numbers in existing records
+remain reproducible and the two can be eyeballed against each other. See
+[§5.3](#53-pressure-correction) for the implementation.
+
+> *Reading check:* I have taken "the table method" to mean the barometric
+> standard-atmosphere formula that produced the correct column of the table
+> above. If you instead meant a published lookup table (e.g. a printed Ctp chart
+> the clinic already uses), say so — that is a different implementation and I
+> would want the actual table before building it.
+
+**(d) Ctp reference temperature — resolved into a user-facing toggle.**
+[Line 296](pressure_converter.py#L296) hard-codes 20.0 °C and 760.0 mmHg with no
+label. That matches **IAEA TRS-398**; **AAPM TG-51** references 22 °C. Rather
+than pick one on your behalf, the software will expose the choice. Design in
+[§5.4](#54-ctp-reference-protocol-toggle).
 
 ---
 
@@ -129,16 +148,20 @@ Sample observation payload (station `KPADOYLE21`, live):
 This confirms your read that WU reports **sea-level-adjusted** pressure — 30.28 inHg
 at 380 ft is only plausible as an altimeter setting, not a station reading.
 
-**Two things I could not verify from this network** — its TLS proxy blocks those
-hosts, which is not evidence they are broken: `nominatim.openstreetmap.org`,
-`api.open-meteo.com`, and `wunderground.com` itself. Confirm from the deploy target.
-
 **One negative result worth recording:** WU's own `v3/location/search` is a
 *place* search, not a street geocoder. Querying "1600 Pennsylvania Ave NW
 Washington DC" returned "North Washington, Apollo, Pennsylvania". **We cannot
 geocode addresses with the WU key alone** — a separate geocoder is required.
+That investigation is §3.2; elevation is §3.3.
 
-### 3.1 The API key question — needs your decision
+*Verification note:* this workstation sits behind a TLS-intercepting proxy whose
+certificate chain Python's bundled CA store rejects. Everything below was
+therefore verified through PowerShell, which validates against the Windows
+certificate store and reaches these hosts correctly. All results are live
+responses, not assumptions — but re-confirm reachability from whatever host you
+finally deploy to.
+
+### 3.1 The WU API key question — needs your decision
 
 The working key I used (`e1f10a1e...`) is the one Weather Underground's *own
 website* embeds in its JavaScript. It works, and it is already public, but:
@@ -161,6 +184,80 @@ The plan below assumes **2 + 3**: WU is the default everywhere, the key is
 configurable, and the abstraction makes a fallback a config change rather than a
 rewrite.
 
+### 3.2 Geocoder — address to lat/lon
+
+All four candidates are free and keyless. Tested with
+`1600 Pennsylvania Ave NW, Washington, DC 20500`:
+
+| Service | Result | Coverage | Key? | Python lib | Verdict |
+|---|---|---|---|---|---|
+| **US Census** | exact street match | US only | no | none — 15-line custom adapter | ✅ primary for US |
+| **Nominatim** (OSM) | 38.8976, −77.0366 "White House" | worldwide | no | **`geopy` built-in** | ✅ primary worldwide |
+| **Photon** (Komoot) | 38.8978, −77.0366, structured fields | worldwide | no | **`geopy` built-in** | ✅ fallback |
+| Maps.co / LocationIQ / OpenCage | — | worldwide | **yes, signup** | varies | ✗ rejected: key required |
+
+Photon on non-US addresses, verified live:
+
+- `Rua Augusta 100, Lisboa, Portugal` → 38.7101, −9.1374
+- `1 Chome-1 Oshiage, Sumida City, Tokyo, Japan` → 35.7103, 139.8134
+
+**Library decision.** I checked geopy's actual `__all__` rather than assuming:
+it ships `Nominatim` and `Photon` as first-class geocoders (alongside ~30 others,
+mostly key-required commercial ones). It does **not** ship a US Census geocoder —
+that one is a short custom function against a plain JSON endpoint. Rate limiting
+for Nominatim's 1-request/second policy comes from
+`geopy.extra.rate_limiter.RateLimiter` (note: that lives in `geopy.extra`, not in
+`geopy.geocoders`).
+
+So: **`geopy` covers two of the three, and the third is ~15 lines of custom code.**
+No GitHub-sourced or hand-rolled geocoding engine is needed.
+
+**Chain, in order.** US Census → Nominatim → Photon. Census goes first because
+for US addresses it gives a true rooftop/street-interpolated match with no rate
+limit and no usage policy to honour; Nominatim and Photon then provide worldwide
+coverage. Each is tried until one returns a result; `Location.source` records
+which one answered so the user can see it.
+
+**Nominatim usage policy** (must be respected or the clinic's IP gets blocked):
+max 1 request/second, a genuine identifying `User-Agent` (this project will send
+`barome/<version> (kprisolo@gmail.com)`), and no bulk querying. All three are
+satisfied by a clinic looking up an address a few times a day, and the caching in
+§5.2 makes repeat lookups free.
+
+### 3.3 Elevation — lat/lon to the address's own elevation
+
+Five free keyless sources, all verified live at 40.307, −75.148:
+
+| Source | Reading | Dataset / resolution | Coverage | CORS |
+|---|---:|---|---|---|
+| Open-Meteo | 324.80 ft | Copernicus GLO-90 | worldwide | yes |
+| **USGS EPQS** | **325.33 ft** | NED, 1 m | US only | `*` |
+| OpenTopoData `ned10m` | 325.39 ft | NED, 10 m | US only | yes |
+| Open-Elevation | 331.36 ft | SRTM 30 m | worldwide | yes |
+| OpenTopoData `srtm30m` | 334.65 ft | SRTM, 30 m | worldwide | yes |
+| OpenTopoData `aster30m` | 337.93 ft | ASTER, 30 m | worldwide | yes |
+
+**The important result: total spread across all six is 13.1 ft.** That is
+0.013 inHg → 0.33 mmHg → **0.044% in Ctp**. Which elevation service you pick is
+effectively irrelevant at the precision that matters here.
+
+That reframes §2.4(b) usefully: the 55 ft station-vs-address error is **four
+times larger than the entire disagreement between every available elevation
+dataset**. Fixing *which point* we ask about matters; agonising over *which
+service* answers does not.
+
+**Chain, in order.** USGS EPQS → Open-Meteo → OpenTopoData. USGS first for its
+1 m US resolution and `*` CORS (which keeps the static-hosting option in §6
+open); Open-Meteo as the worldwide default because it is fast, keyless and
+unmetered; OpenTopoData last as it caps public use at 1000 calls/day and
+1 call/second. `elev_source` on the result records which answered.
+
+**Python libraries considered and rejected.** `elevation` and `SRTM.py` both work
+by downloading multi-megabyte SRTM tiles and reading them locally. That buys
+offline capability the clinic does not need, at the cost of large downloads, GDAL
+dependencies, and 30 m data that is *worse* than the 1 m USGS figure. A plain
+HTTP call is the better engineering here — no library required.
+
 ---
 
 ## 4. Target architecture
@@ -169,10 +266,10 @@ rewrite.
 nws_pressure_correction/
 ├── src/barome/
 │   ├── __init__.py
-│   ├── config.py          # API key(s), reference T/P, unit factors, HTTP timeouts
+│   ├── config.py          # API key(s), Ctp protocol default, unit factors, timeouts
 │   ├── models.py          # frozen dataclasses: Location, Station, Observation, PressureResult
-│   ├── geocode.py         # address str          -> Location
-│   ├── elevation.py       # lat, lon             -> elevation_ft + source
+│   ├── geocode.py         # address str -> Location   (Census -> Nominatim -> Photon)
+│   ├── elevation.py       # lat, lon    -> elevation_ft + source  (USGS -> Open-Meteo -> OpenTopo)
 │   ├── physics.py         # PURE. no network, no I/O. fully unit-tested.
 │   ├── providers/
 │   │   ├── base.py          # Protocol: nearest_station(), current_observation()
@@ -237,7 +334,126 @@ structured.
 
 ---
 
-## 5. Phased work
+## 5. Implementation detail for the new components
+
+### 5.1 `geocode.py`
+
+```python
+GEOCODER_CHAIN = ("census", "nominatim", "photon")
+
+@dataclass(frozen=True)
+class Location:
+    lat: float
+    lon: float
+    display_name: str     # what we echo back so the user can confirm the match
+    source: str           # "census" | "nominatim" | "photon"
+    confidence: str        # "exact" | "interpolated" | "approximate"
+
+def geocode(address: str, chain=GEOCODER_CHAIN) -> Location:
+    """First geocoder in the chain that returns a hit, wins.
+    Raises GeocodingError only if every provider fails or returns nothing."""
+```
+
+- **Census** (`_geocode_census`): a plain `GET` on
+  `geocoding.geo.census.gov/geocoder/locations/onelineaddress` with
+  `benchmark=2020&format=json`, reading `result.addressMatches[0].coordinates`.
+  ~15 lines, no dependency. Skipped immediately if the address has a non-US
+  country hint.
+- **Nominatim / Photon**: `geopy.geocoders.Nominatim` and `.Photon`, both wrapped
+  in `geopy.extra.rate_limiter.RateLimiter(min_delay_seconds=1)` and constructed
+  with the identifying `user_agent` string from §3.2.
+
+**Always echo the match back.** `display_name` goes in the results panel, because
+a geocoder that silently resolves a typo'd address to somewhere 40 miles away is
+the most likely way this tool produces a confidently wrong number. If
+`confidence` is `approximate`, that becomes a `warning` on the result.
+
+### 5.2 `elevation.py`
+
+```python
+ELEVATION_CHAIN = ("usgs", "openmeteo", "opentopodata")
+
+def elevation_ft(lat: float, lon: float, chain=ELEVATION_CHAIN) -> tuple[float, str]:
+    """Returns (feet, source_name). USGS returns feet directly via units=Feet;
+    the other two return metres and are converted (x 3.28084)."""
+```
+
+Each is a single JSON `GET`, parsed as: USGS `.value`; Open-Meteo `.elevation[0]`;
+OpenTopoData `.results[0].elevation`. USGS returns a sentinel of `-1000000` for
+off-grid points — treat that as a miss and fall through, which is what makes the
+chain work for non-US addresses without a country check.
+
+**Caching.** One `functools.lru_cache` on `(round(lat,4), round(lon,4))`.
+A clinic re-checks the same address all day; its elevation does not change. This
+also keeps Nominatim's rate policy comfortably satisfied. Weather observations
+get a separate short TTL cache (~5 min) since those *do* change.
+
+### 5.3 Pressure correction
+
+Per the decision in §2.4(c), `physics.py` implements both, with barometric as the
+default and the only value shown as *the* answer:
+
+```python
+class Method(StrEnum):
+    BAROMETRIC = "barometric"   # DEFAULT
+    LINEAR     = "linear"       # legacy, shown as cross-check only
+
+def msl_to_station_pressure(p_msl_inhg: float, elev_ft: float,
+                            method: Method = Method.BAROMETRIC) -> float:
+    if method is Method.BAROMETRIC:
+        h = elev_ft * 0.3048                       # ft -> m
+        return p_msl_inhg * (1 - 0.0065 * h / 288.15) ** 5.25588
+    return p_msl_inhg - elev_ft / 1000.0           # legacy 1 inHg/1000 ft
+```
+
+Constants (`0.0065` K/m lapse rate, `288.15` K sea-level standard temperature,
+exponent `5.25588`) become named module constants, not literals. The unit
+conversions currently inlined at
+[pressure_converter.py:259-267](pressure_converter.py#L259-L267) move into a
+single `convert_pressure_units()` returning a dict, with `0.03937` replaced by
+the exact `1/25.4`.
+
+Tests assert the §2.4(c) table row by row — that table becomes the fixture.
+
+### 5.4 Ctp reference protocol toggle
+
+```python
+class CtpProtocol(StrEnum):
+    TRS_398 = "TRS-398"   # 20.0 C, 101.325 kPa  (current behaviour)
+    TG_51   = "TG-51"     # 22.0 C, 101.325 kPa
+
+REFERENCE_TEMP_C = {CtpProtocol.TRS_398: 20.0, CtpProtocol.TG_51: 22.0}
+
+def ctp(temp_c: float, pressure_mmhg: float,
+        protocol: CtpProtocol = CtpProtocol.TRS_398) -> float:
+    t_ref = REFERENCE_TEMP_C[protocol]
+    return ((273.2 + temp_c) / (273.2 + t_ref)) * (REFERENCE_PRESSURE_MMHG / pressure_mmhg)
+```
+
+**Default stays TRS-398 (20 °C)** — that is what the code does today, so nobody's
+existing numbers move without them choosing it.
+
+Surfaced in both front ends:
+
+- **Web:** a two-option radio directly above the Ctp result —
+  `( ) 20 °C — IAEA TRS-398` / `( ) 22 °C — AAPM TG-51`. The result line always
+  restates it: *"Ctp = 1.0213 (TRS-398, 20 °C reference)"*. Selection persists in
+  session state so it is chosen once, not every visit.
+- **CLI:** a `--protocol {trs-398,tg-51}` flag, plus a prompt if not passed.
+- **Config:** a `BAROME_CTP_PROTOCOL` environment variable lets the clinic pin
+  its house standard so nobody has to remember.
+
+The protocol is a field on `PressureResult` and appears in every rendering. The
+failure mode being designed out is a physicist reading a Ctp without knowing
+which reference produced it — a 2 °C difference in reference temperature is
+~0.68% in Ctp, comparable to everything else being corrected for here.
+
+*Still flagged for you:* which protocol the clinic actually runs. The toggle
+means the software does not need that answer to ship, but the default does.
+
+---
+
+## 6. Phased work
 
 Each phase leaves the repo working. No phase requires the next.
 
@@ -247,33 +463,39 @@ Rewrite `requirements.txt` as UTF-8; fix `.gitignore` (`venv/`, `.venv/`,
 `ruff` config; reindent to 4 spaces.
 
 **Phase 1 — extract the pure core** *(~2 h)*
-Move the math into `physics.py` as pure functions: `msl_to_station_pressure()`
-(both methods), `convert_pressure_units()`, `ctp()`, `intercomparison()`.
-Write tests **first** against today's outputs so the refactor is provably
-behaviour-preserving, then add the barometric-formula cases from §2.4(c) as the
-new expected values. Fixes bug #9. No network code moves yet.
+Move the math into `physics.py` per §5.3 and §5.4: `msl_to_station_pressure()`
+(both methods), `convert_pressure_units()`, `ctp()` with the protocol argument,
+`intercomparison()`. Write tests **first** pinning today's outputs so the
+extraction is provably behaviour-preserving, then add the §2.4(c) table as the
+barometric fixture and flip the default. Fixes bug #9. No network code yet.
 
-**Phase 2 — replace scraping with APIs** *(~3 h)*
-Build `providers/wunderground.py` on the two verified endpoints. Add
-`geocode.py` (Nominatim primary for worldwide coverage, US Census for exact US
-street matches) and `elevation.py` (USGS for the US, Open-Meteo elsewhere).
-Retire the BeautifulSoup selectors and `soup_check()`. Drop `bs4` / `soupsieve`
-from requirements. Fixes bug #2 and the fragility in §2.4(a).
+**Phase 2 — geocoding and elevation** *(~2 h)*
+Build `geocode.py` (§5.1) and `elevation.py` (§5.2) with their fallback chains,
+caching, and rate limiting. Add `geopy` to requirements. Test each provider in
+the chain independently, plus the fallthrough behaviour when the first returns
+nothing. This is the phase that delivers "the user types only their address".
 
-**Phase 3 — the service seam** *(~1 h)*
-Write `service.py` implementing the contract above, including the elevation
-correctness fix from §2.4(b): use the *address's* elevation, not the station's,
-and warn when falling back. Rewrite `cli.py` as a thin caller — one address
-prompt, not two coordinate prompts. Fixes bugs #1, #3, #4, #5.
+**Phase 3 — replace scraping with the WU API** *(~2 h)*
+Build `providers/wunderground.py` on the two verified endpoints from §3. Retire
+the BeautifulSoup selectors and `soup_check()`; drop `bs4` / `soupsieve` from
+requirements. Fixes bug #2 and the fragility in §2.4(a).
 
-**Phase 4 — the web app** *(~3 h)*
+**Phase 4 — the service seam** *(~1 h)*
+Write `service.py` implementing the §4 contract, including the elevation
+correctness fix from §2.4(b): use the **address's** elevation from `elevation.py`,
+never the station's, and emit a `warning` if it ever has to fall back to the
+station figure. Rewrite `cli.py` as a thin caller — one address prompt, plus the
+`--protocol` flag. Fixes bugs #1, #3, #4, #5.
+
+**Phase 5 — the web app** *(~3 h)*
 One text input, one button, one results card: the corrected pressure large and
 first, then the unit table, then a collapsible "how we got this" panel showing
-the resolved address, station name and distance, observation timestamp, both
-elevations, and the source links. Optional second panel for Ctp (temperature
-input) and intercomparison, preserving today's features.
+the resolved address and geocoder used, station name and distance, observation
+timestamp, both elevations, the legacy linear cross-check, and the source links.
+Second panel for Ctp — temperature input plus the §5.4 protocol toggle — and
+intercomparison, preserving today's features.
 
-**Phase 5 — deploy** *(~1 h)* — see §6.
+**Phase 6 — deploy** *(~1 h)* — see §7.
 
 **Later, optional:** cache observations for ~5 min per station — WU updates every
 few minutes, so there is no reason to re-hit the API on every reload; let the user
@@ -282,7 +504,7 @@ identifies a patient or a site.
 
 ---
 
-## 6. Free hosting options
+## 7. Free hosting options
 
 | Option | Cost | Cold start | Keeps Python? | Notes |
 |---|---|---|---|---|
@@ -298,23 +520,43 @@ codebase that the CLI also uses. If the cold start turns out to annoy people, th
 static GitHub Pages route is the escape hatch — and §4's clean separation means
 only the thin layer gets rewritten, not the logic.
 
+Note that the geocoding and elevation chains chosen in §3.2 and §3.3 keep that
+escape hatch genuinely open: USGS and the WU API both send
+`Access-Control-Allow-Origin: *`, and Nominatim/Photon/Open-Meteo are all
+browser-callable. The one exception is the US Census geocoder, which sends no
+CORS headers — a static build would fall back to Nominatim first instead.
+
 ---
 
-## 7. Decisions needed before implementation
+## 8. Decisions still open
 
-1. **Ctp reference temperature** — 20 °C (TRS-398, what the code does now) or
-   22 °C (TG-51)? Or selectable, defaulting to which?
-2. **Pressure formula** — switch the default to the barometric formula, or keep
-   the linear one as default for continuity with historical records?
-3. **WU API key** — is there a personal weather station available to get a free
+**Resolved in this revision:**
+
+- ~~Pressure formula~~ → barometric is now the default; linear retained as a
+  labelled cross-check (§2.4(c), §5.3).
+- ~~Geocoder~~ → `geopy` (Nominatim + Photon) plus a small custom Census
+  adapter, chained (§3.2, §5.1).
+- ~~Elevation source~~ → USGS → Open-Meteo → OpenTopoData, chained, using the
+  **address's** elevation rather than the station's (§3.3, §5.2).
+- ~~Ctp reference temperature~~ → user-selectable toggle, defaulting to TRS-398
+  (§5.4). Note this resolves the *software* question, not the clinical one below.
+
+**Still open:**
+
+1. **Which Ctp protocol the clinic actually runs.** The toggle means the build
+   is not blocked on this, but the shipped default should match your house
+   standard. TRS-398 is assumed only because it preserves current behaviour.
+2. **WU API key** — is there a personal weather station available to get a free
    official key, or ship with the public one plus an env-var override?
-4. **Scope of the web app** — address-and-pressure only, or carry Ctp and
+3. **Scope of the web app** — address-and-pressure only, or carry Ctp and
    intercomparison across too? This plan assumes all three, with the latter two
    collapsed by default.
-5. **Keep the NWS provider?** It is now redundant for the default flow, but it is
+4. **Keep the NWS provider?** It is now redundant for the default flow, but it is
    a useful independent cross-check and a fallback if the WU key dies.
+5. **"Table method" reading** — confirm the §2.4(c) note: barometric formula, or
+   a specific published lookup table you already use?
 
-## 8. Explicitly out of scope
+## 9. Explicitly out of scope
 
 Accounts / auth, storing results, mobile apps, patient data of any kind, and any
 claim of medical-device or regulatory status. This stays a convenience calculator
