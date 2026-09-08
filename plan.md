@@ -3,6 +3,7 @@
 **Status:** proposal only, nothing implemented.
 **Drafted:** 2026-09-08 · **Revised:** 2026-09-08 (geocoding, elevation,
 barometric formula, Ctp toggle defaulting to TG-51)
+**Revised:** 2026-09-08 (protocol auto-selection by country, calculation trace)
 
 ## 1. Goal
 
@@ -16,11 +17,17 @@ Everything else — latitude/longitude, which weather station, the station's
 elevation, the site's elevation — is resolved for them. Weather Underground is
 the default source for all users, worldwide.
 
-The one deliberate exception to "one input" is the **Ctp reference protocol**
-(§5.4): a two-option toggle, chosen once and remembered, defaulting to
-**AAPM TG-51 (22 °C)** for US users with **IAEA TRS-398 (20 °C)** one click away
-for international ones. It stays visible rather than silent because the software
-must not quietly pick a clinical convention on the user's behalf.
+The **Ctp reference protocol** is auto-selected from the same address — US
+addresses get **AAPM TG-51 (22 °C)**, everywhere else gets **IAEA TRS-398
+(20 °C)** — and stays overridable by hand at any time (§5.4). So it costs the
+user no extra input, but it is never silent: which protocol was used, and
+whether it was chosen automatically or by hand, is stated on every result.
+
+And because a number a physicist cannot check is a number they should not trust,
+the tool **shows its whole chain of reasoning** (§5.5): the address as entered
+and as resolved, the coordinates, the elevation and its source, the station and
+its distance, and every formula with its actual values substituted in — all with
+links back to the sources.
 
 **New runtime dependency:** `geopy` (for Nominatim and Photon geocoding).
 `beautifulsoup4` / `soupsieve` are *removed* — the scraping they supported is
@@ -322,6 +329,8 @@ class PressureResult:
     resolved_address: str
     lat: float
     lon: float
+    country_code: str | None   # drives the §5.4 protocol auto-selection
+    geocoder: str              # which of the chain answered
     # which station, and how far away — always shown, never hidden
     station_id: str
     station_name: str
@@ -339,11 +348,22 @@ class PressureResult:
     pressure_station_hpa: float
     pressure_station_kpa: float
     pressure_station_pa: float
+    pressure_station_mmhg_linear: float   # legacy cross-check, §5.3
     method: Method
-    # provenance and honesty
+    # Ctp protocol: what was used, and how it got chosen (§5.4)
+    ctp_protocol: CtpProtocol
+    ctp_protocol_source: str    # "auto" | "manual" | "env"
+    ctp_protocol_reason: str    # human-readable, always displayed
+    # provenance and honesty (§5.5)
+    trace: list[TraceStep]
     source_urls: dict[str, str]
     warnings: list[str]
 ```
+
+Note that `PressureResult` deliberately holds no Ctp *value*. Ctp depends on a
+temperature the user supplies afterwards, and on a protocol they can flip at any
+time — keeping it out means the override in §5.4 recomputes from cached data
+instead of re-running the whole chain.
 
 `warnings` carries the things a user must not miss: station is 14 miles away,
 observation is 3 hours stale, `qcStatus` is −1, elevation fell back to the
@@ -450,9 +470,62 @@ def ctp(temp_c: float, pressure_mmhg: float,
     return ((273.2 + temp_c) / (273.2 + t_ref)) * (REFERENCE_PRESSURE_MMHG / pressure_mmhg)
 ```
 
-**Default is TG-51 (22 °C)** — AAPM TG-51 is the US standard and this is a US
-clinic. TRS-398 (20 °C) remains one click away for international users, for whom
-it is the standard.
+**The default is selected automatically from the resolved address**, then
+overridable by hand. US → TG-51 (22 °C); everywhere else → TRS-398 (20 °C).
+
+```python
+US_CODES = {"US", "PR", "GU", "VI", "AS", "MP"}   # defensive; see note below
+
+def auto_protocol(country_code: str | None) -> tuple[CtpProtocol, str]:
+    """Returns (protocol, human-readable reason). The reason is displayed, always."""
+    if not country_code:
+        return CtpProtocol.TG_51, "country could not be resolved — defaulted to US standard"
+    cc = country_code.upper()
+    if cc in US_CODES:
+        return CtpProtocol.TG_51, f"address resolved to {cc} → AAPM TG-51 (US standard)"
+    return CtpProtocol.TRS_398, f"address resolved to {cc} → IAEA TRS-398 (international standard)"
+```
+
+**The country code is already free** — every geocoder in the §3.2 chain supplies
+it, verified live:
+
+| Geocoder | Field | Format |
+|---|---|---|
+| Census | — | US-only by construction; implies `US` |
+| Nominatim | `address.country_code` (needs `addressdetails=1`) | **lowercase** — `us` |
+| Photon | `properties.countrycode` | **uppercase** — `US` |
+
+Note the case mismatch between the two: normalise with `.upper()` before
+comparing, or this silently misroutes every Nominatim-resolved address to
+TRS-398. That is exactly the class of bug this plan exists to prevent, so it gets
+a test.
+
+I also checked the US territories, since they are the obvious edge case:
+Guam, USVI, American Samoa, the Northern Marianas and Puerto Rico **all return
+`US`** from Photon rather than their own ISO codes. So `US_CODES` above is
+belt-and-braces against a geocoder that behaves differently, not a live
+dependency — but it costs nothing and it is the difference between a clinic in
+San Juan getting TG-51 and getting a silently wrong protocol.
+
+**Manual override, after the calculation.** The auto-selection is a starting
+point, never a lock. Because `ctp()` is pure and both the temperature and the
+corrected pressure are already known by then, flipping the protocol recomputes
+**instantly and locally — no re-geocode, no new network call**. The user can
+toggle back and forth and watch the number move.
+
+The displayed state always says which of the two it is in:
+
+- `Protocol: TG-51 (22 °C) — auto-selected: address resolved to US`
+- `Protocol: TRS-398 (20 °C) — manually overridden (auto-selection was TG-51)`
+
+`PressureResult` carries both `ctp_protocol` and `ctp_protocol_source`
+(`"auto"` | `"manual"` | `"env"`), plus the reason string, so the provenance
+survives into the §5.5 trace and any exported record.
+
+**Precedence:** explicit user override > `BAROME_CTP_PROTOCOL` env var (a site
+pinning its house standard) > auto-selection from country. An env-var pin
+suppresses auto-selection and says so in the display, so a physicist never
+wonders why the toggle "isn't working".
 
 Note this is a **deliberate change from current behaviour**, which is
 unconditionally 20 °C: see the −0.6775% shift documented in §2.4(d). It is the
@@ -462,25 +535,111 @@ so it should be the loudest line in the release notes.
 Surfaced in both front ends:
 
 - **Web:** a two-option radio directly above the Ctp result —
-  `(•) 22 °C — AAPM TG-51` / `( ) 20 °C — IAEA TRS-398`. The result line always
-  restates it: *"Ctp = 1.0145 (TG-51, 22 °C reference)"*. Selection persists in
-  session state so it is chosen once, not every visit.
-- **CLI:** a `--protocol {tg-51,trs-398}` flag, defaulting to `tg-51`.
-- **Config:** a `BAROME_CTP_PROTOCOL` environment variable lets a site pin its
-  house standard so nobody has to remember — the natural setting for an
-  international deployment to flip to `trs-398` once, globally.
+  `(•) 22 °C — AAPM TG-51` / `( ) 20 °C — IAEA TRS-398`, pre-selected by
+  `auto_protocol()` and annotated with its reason. Changing it re-renders from
+  cached values. Selection persists in session state.
+- **CLI:** `--protocol {tg-51,trs-398}` overrides; omitted, it auto-selects and
+  prints the reason.
+- **Config:** `BAROME_CTP_PROTOCOL` pins a site's house standard.
 
-The protocol is a field on `PressureResult` and appears in every rendering. The
-failure mode being designed out is a physicist reading a Ctp without knowing
-which reference produced it — and at a uniform 0.6775%, that ambiguity is larger
-than the elevation error this whole refactor exists to fix.
+The protocol appears in every rendering, never as a bare number. The failure mode
+being designed out is a physicist reading a Ctp without knowing which reference
+produced it — and at a uniform 0.6775%, that ambiguity is larger than the
+elevation error this whole refactor exists to fix.
 
-*Optional refinement, not planned unless you want it:* the geocoder already
-returns a `countrycode` for every resolved address (verified — Photon returns
-`"countrycode":"US"`). A locale-aware default that suggests TRS-398 for non-US
-addresses would therefore cost almost nothing. Left out deliberately: an
-auto-switching clinical convention is exactly the kind of silent behaviour this
-section is trying to eliminate. Flagging it as available, not recommending it.
+### 5.5 "Show your work" — the calculation trace
+
+Every number the tool reports must be traceable to its inputs without reading the
+source. This is the feature that makes the output checkable rather than trusted,
+which matters more here than anywhere else in the design: the current script's
+one genuinely good instinct is printing the source URL so the user can verify it,
+and this generalises that instinct to the whole chain.
+
+**Data model.** Each stage appends a step; the result carries the list.
+
+```python
+@dataclass(frozen=True)
+class TraceStep:
+    stage: str              # "geocode" | "elevation" | "station" | "observation"
+                            # | "correction" | "units" | "ctp"
+    provider: str           # which service actually answered
+    inputs: dict[str, Any]
+    output: dict[str, Any]
+    expression: str | None  # the formula with real numbers substituted in
+    url: str | None         # the exact request, so the user can click it
+    note: str | None        # e.g. "census returned no match — fell through to nominatim"
+```
+
+**Rendering.** A panel, expanded by default in the web app and printed in full by
+the CLI, reading top to bottom as the calculation actually ran. With live values
+from the verified test point:
+
+```
+1. ADDRESS
+   You entered : 123 Main St, Doylestown, PA 18901
+   Resolved to : Doylestown, Bucks County, Pennsylvania, 18901, United States
+   Geocoder    : US Census (exact street match)
+   Coordinates : 40.30700, -75.14800
+   Country     : US  ->  selects AAPM TG-51
+   [verify]      https://geocoding.geo.census.gov/geocoder/...
+
+2. YOUR ELEVATION  (at your address, not the station's)
+   Elevation   : 325.33 ft  (99.16 m)
+   Source      : USGS EPQS, NED 1 m dataset
+   [verify]      https://epqs.nationalmap.gov/v1/json?x=-75.148&y=40.307...
+
+3. WEATHER STATION
+   Station     : KPADOYLE21 "Doylestown Boro Fairgrounds"
+   Distance    : 0.7 mi from your address
+   Station elev: 380 ft   (not used in the calculation - shown for comparison)
+   Observed    : 2026-09-08 13:00 local  (14 minutes ago)
+   Quality     : qcStatus 1 (passed)
+   [verify]      https://www.wunderground.com/dashboard/pws/KPADOYLE21
+
+4. REPORTED PRESSURE  (sea-level adjusted, as WU publishes it)
+   P_msl       : 30.28 inHg
+
+5. ELEVATION CORRECTION  (standard-atmosphere barometric formula)
+   P_station = P_msl x (1 - 0.0065 x h / 288.15) ^ 5.25588
+             = 30.28 x (1 - 0.0065 x 99.16 / 288.15) ^ 5.25588
+             = 30.28 x 0.98830
+             = 29.9257 inHg
+             = 760.11 mmHg
+   Cross-check : legacy 1 inHg/1000 ft rule gives 760.85 mmHg  (+0.74 mmHg)
+
+6. YOUR PRESSURE, IN OTHER UNITS
+   760.11 mmHg | 29.926 inHg | 1013.40 hPa | 101.340 kPa | 101340 Pa
+
+7. Ctp
+   Protocol    : AAPM TG-51, 22.0 C reference  [auto-selected: country = US]
+   Your temp   : 21.5 C
+   Ctp = (273.2 + T) / (273.2 + T_ref) x (760.0 / P)
+       = (273.2 + 21.5) / (273.2 + 22.0) x (760.0 / 760.11)
+       = 0.99831 x 0.99985
+       = 0.9982
+   If TRS-398 (20.0 C) were selected instead: 1.0050   (+0.68%)
+```
+
+Four deliberate choices in that layout:
+
+- **Formulas are shown with the actual numbers substituted**, not just symbolically
+  and not just as a result. A physicist can check any line with a calculator,
+  which is the entire point.
+- **The station's elevation is displayed but explicitly marked unused.** It is the
+  number the old code wrongly used (§2.4(b)); showing it beside the one now used
+  makes the fix legible instead of invisible.
+- **The unselected protocol's Ctp is shown too.** It costs one multiplication and
+  removes any doubt about the §2.4(d) default change.
+- **Every external fact carries its verify link.** Station and elevation links are
+  human-readable pages where possible, not raw API URLs.
+
+**Export.** A "copy as text" button (and `--trace` on the CLI) emits exactly the
+block above, timestamped, for pasting into a QA log. Clinics keep records; the
+tool should hand them something paste-ready rather than making them retype it.
+
+**Warnings render inline, at the step they belong to**, not collected in a
+footer — a station 14 miles away or a 3-hour-old observation is flagged in
+step 3 where the user is already looking.
 
 ---
 
@@ -510,6 +669,8 @@ Build `geocode.py` (§5.1) and `elevation.py` (§5.2) with their fallback chains
 caching, and rate limiting. Add `geopy` to requirements. Test each provider in
 the chain independently, plus the fallthrough behaviour when the first returns
 nothing. This is the phase that delivers "the user types only their address".
+Capture `country_code` here — normalised with `.upper()`, with a test covering
+Nominatim's lowercase `us` — since §5.4's auto-selection depends on it.
 
 **Phase 3 — replace scraping with the WU API** *(~2 h)*
 Build `providers/wunderground.py` on the two verified endpoints from §3. Retire
@@ -520,16 +681,23 @@ requirements. Fixes bug #2 and the fragility in §2.4(a).
 Write `service.py` implementing the §4 contract, including the elevation
 correctness fix from §2.4(b): use the **address's** elevation from `elevation.py`,
 never the station's, and emit a `warning` if it ever has to fall back to the
-station figure. Rewrite `cli.py` as a thin caller — one address prompt, plus the
-`--protocol` flag. Fixes bugs #1, #3, #4, #5.
+station figure. Assemble the §5.5 `TraceStep` list as the chain runs — each
+stage appends its own step, so the trace cannot drift out of sync with the
+calculation that produced it. Wire up `auto_protocol()` (§5.4). Rewrite `cli.py`
+as a thin caller — one address prompt, plus `--protocol` and `--trace`.
+Fixes bugs #1, #3, #4, #5.
 
-**Phase 5 — the web app** *(~3 h)*
+**Phase 5 — the web app** *(~4 h)*
 One text input, one button, one results card: the corrected pressure large and
-first, then the unit table, then a collapsible "how we got this" panel showing
-the resolved address and geocoder used, station name and distance, observation
-timestamp, both elevations, the legacy linear cross-check, and the source links.
-Second panel for Ctp — temperature input plus the §5.4 protocol toggle — and
-intercomparison, preserving today's features.
+first, then the unit table. Below it the §5.5 trace panel, expanded by default,
+rendering all seven steps with their verify links and a "copy as text" button.
+Second panel for Ctp — temperature input plus the §5.4 protocol radio,
+pre-selected from country with its reason shown, recomputing locally on
+override — and intercomparison, preserving today's features.
+
+The trace is the bulk of this phase's work and the reason the estimate moved from
+3 h to 4 h. Build it as a shared renderer taking `list[TraceStep]`, so the CLI's
+`--trace` and the web panel cannot disagree about what the program did.
 
 **Phase 6 — deploy** *(~1 h)* — see §7.
 
