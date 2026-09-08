@@ -2,7 +2,7 @@
 
 **Status:** proposal only, nothing implemented.
 **Drafted:** 2026-09-08 · **Revised:** 2026-09-08 (geocoding, elevation,
-barometric formula, Ctp protocol toggle)
+barometric formula, Ctp toggle defaulting to TG-51)
 
 ## 1. Goal
 
@@ -17,8 +17,10 @@ elevation, the site's elevation — is resolved for them. Weather Underground is
 the default source for all users, worldwide.
 
 The one deliberate exception to "one input" is the **Ctp reference protocol**
-(§5.4): a two-option toggle, chosen once and remembered, because the software
-must not silently pick a clinical convention on the user's behalf.
+(§5.4): a two-option toggle, chosen once and remembered, defaulting to
+**AAPM TG-51 (22 °C)** for US users with **IAEA TRS-398 (20 °C)** one click away
+for international ones. It stays visible rather than silent because the software
+must not quietly pick a clinical convention on the user's behalf.
 
 **New runtime dependency:** `geopy` (for Nominatim and Photon geocoding).
 `beautifulsoup4` / `soupsieve` are *removed* — the scraping they supported is
@@ -117,17 +119,34 @@ labelled *"legacy 1 inHg/1000 ft approximation"*, so numbers in existing records
 remain reproducible and the two can be eyeballed against each other. See
 [§5.3](#53-pressure-correction) for the implementation.
 
-> *Reading check:* I have taken "the table method" to mean the barometric
-> standard-atmosphere formula that produced the correct column of the table
-> above. If you instead meant a published lookup table (e.g. a printed Ctp chart
-> the clinic already uses), say so — that is a different implementation and I
-> would want the actual table before building it.
+**CONFIRMED:** "the table method" means the **standard-atmosphere barometric
+formula** — the one that produced the correct column above — not a published
+lookup chart. That is the calculation to implement:
 
-**(d) Ctp reference temperature — resolved into a user-facing toggle.**
+```
+P_station = P_msl · (1 − L·h / T₀) ^ (g·M / (R·L))
+          = P_msl · (1 − 0.0065·h / 288.15) ^ 5.25588
+```
+
+with `h` in metres, `L` = 0.0065 K/m (tropospheric lapse rate), `T₀` = 288.15 K
+(ISA sea-level temperature), and the exponent 5.25588 following from standard
+gravity, the molar mass of dry air, and the universal gas constant.
+
+**(d) Ctp reference temperature — resolved into a user-facing toggle,
+defaulting to TG-51.**
 [Line 296](pressure_converter.py#L296) hard-codes 20.0 °C and 760.0 mmHg with no
-label. That matches **IAEA TRS-398**; **AAPM TG-51** references 22 °C. Rather
-than pick one on your behalf, the software will expose the choice. Design in
+label. That matches **IAEA TRS-398**; **AAPM TG-51** references 22 °C. Both ship,
+selectable, with **TG-51 (22 °C) as the default** — this is a US clinic, and
+TG-51 is the US standard, while TRS-398 is the international one. Design in
 [§5.4](#54-ctp-reference-protocol-toggle).
+
+⚠️ **This changes current behaviour.** Today's script always computes at 20 °C.
+Because the two protocols differ only by a constant ratio of reference
+temperatures, switching the default shifts *every* Ctp by exactly
+`(273.2+20)/(273.2+22) − 1` = **−0.6775%**, uniformly, regardless of the measured
+temperature or pressure. That is a real step change against historical records,
+not rounding — it needs to be called out in the release notes and visible in the
+UI, which is what §5.4's always-restate-the-protocol rule is for.
 
 ---
 
@@ -419,37 +438,49 @@ Tests assert the §2.4(c) table row by row — that table becomes the fixture.
 
 ```python
 class CtpProtocol(StrEnum):
-    TRS_398 = "TRS-398"   # 20.0 C, 101.325 kPa  (current behaviour)
-    TG_51   = "TG-51"     # 22.0 C, 101.325 kPa
+    TG_51   = "TG-51"     # 22.0 C, 101.325 kPa   <- DEFAULT (AAPM, US standard)
+    TRS_398 = "TRS-398"   # 20.0 C, 101.325 kPa      (IAEA, international)
 
-REFERENCE_TEMP_C = {CtpProtocol.TRS_398: 20.0, CtpProtocol.TG_51: 22.0}
+REFERENCE_TEMP_C = {CtpProtocol.TG_51: 22.0, CtpProtocol.TRS_398: 20.0}
+DEFAULT_CTP_PROTOCOL = CtpProtocol.TG_51
 
 def ctp(temp_c: float, pressure_mmhg: float,
-        protocol: CtpProtocol = CtpProtocol.TRS_398) -> float:
+        protocol: CtpProtocol = DEFAULT_CTP_PROTOCOL) -> float:
     t_ref = REFERENCE_TEMP_C[protocol]
     return ((273.2 + temp_c) / (273.2 + t_ref)) * (REFERENCE_PRESSURE_MMHG / pressure_mmhg)
 ```
 
-**Default stays TRS-398 (20 °C)** — that is what the code does today, so nobody's
-existing numbers move without them choosing it.
+**Default is TG-51 (22 °C)** — AAPM TG-51 is the US standard and this is a US
+clinic. TRS-398 (20 °C) remains one click away for international users, for whom
+it is the standard.
+
+Note this is a **deliberate change from current behaviour**, which is
+unconditionally 20 °C: see the −0.6775% shift documented in §2.4(d). It is the
+one place in this refactor where output moves for a reason other than a bug fix,
+so it should be the loudest line in the release notes.
 
 Surfaced in both front ends:
 
 - **Web:** a two-option radio directly above the Ctp result —
-  `( ) 20 °C — IAEA TRS-398` / `( ) 22 °C — AAPM TG-51`. The result line always
-  restates it: *"Ctp = 1.0213 (TRS-398, 20 °C reference)"*. Selection persists in
+  `(•) 22 °C — AAPM TG-51` / `( ) 20 °C — IAEA TRS-398`. The result line always
+  restates it: *"Ctp = 1.0145 (TG-51, 22 °C reference)"*. Selection persists in
   session state so it is chosen once, not every visit.
-- **CLI:** a `--protocol {trs-398,tg-51}` flag, plus a prompt if not passed.
-- **Config:** a `BAROME_CTP_PROTOCOL` environment variable lets the clinic pin
-  its house standard so nobody has to remember.
+- **CLI:** a `--protocol {tg-51,trs-398}` flag, defaulting to `tg-51`.
+- **Config:** a `BAROME_CTP_PROTOCOL` environment variable lets a site pin its
+  house standard so nobody has to remember — the natural setting for an
+  international deployment to flip to `trs-398` once, globally.
 
 The protocol is a field on `PressureResult` and appears in every rendering. The
 failure mode being designed out is a physicist reading a Ctp without knowing
-which reference produced it — a 2 °C difference in reference temperature is
-~0.68% in Ctp, comparable to everything else being corrected for here.
+which reference produced it — and at a uniform 0.6775%, that ambiguity is larger
+than the elevation error this whole refactor exists to fix.
 
-*Still flagged for you:* which protocol the clinic actually runs. The toggle
-means the software does not need that answer to ship, but the default does.
+*Optional refinement, not planned unless you want it:* the geocoder already
+returns a `countrycode` for every resolved address (verified — Photon returns
+`"countrycode":"US"`). A locale-aware default that suggests TRS-398 for non-US
+addresses would therefore cost almost nothing. Left out deliberately: an
+auto-switching clinical convention is exactly the kind of silent behaviour this
+section is trying to eliminate. Flagging it as available, not recommending it.
 
 ---
 
@@ -468,6 +499,11 @@ Move the math into `physics.py` per §5.3 and §5.4: `msl_to_station_pressure()`
 `intercomparison()`. Write tests **first** pinning today's outputs so the
 extraction is provably behaviour-preserving, then add the §2.4(c) table as the
 barometric fixture and flip the default. Fixes bug #9. No network code yet.
+
+Two intentional output changes land here and both need explicit before/after
+tests, so the diff in results is a reviewed artefact rather than a surprise:
+barometric replacing linear (§2.4(c)), and the TG-51 default replacing the
+implicit 20 °C (§2.4(d), a uniform −0.6775%).
 
 **Phase 2 — geocoding and elevation** *(~2 h)*
 Build `geocode.py` (§5.1) and `elevation.py` (§5.2) with their fallback chains,
@@ -538,23 +574,24 @@ CORS headers — a static build would fall back to Nominatim first instead.
   adapter, chained (§3.2, §5.1).
 - ~~Elevation source~~ → USGS → Open-Meteo → OpenTopoData, chained, using the
   **address's** elevation rather than the station's (§3.3, §5.2).
-- ~~Ctp reference temperature~~ → user-selectable toggle, defaulting to TRS-398
-  (§5.4). Note this resolves the *software* question, not the clinical one below.
+- ~~Ctp reference temperature~~ → user-selectable toggle, **defaulting to TG-51
+  (22 °C)** as the US standard, with TRS-398 one click away for international
+  use (§2.4(d), §5.4).
+- ~~"Table method" reading~~ → confirmed as the standard-atmosphere barometric
+  formula, not a published lookup chart (§2.4(c)).
 
 **Still open:**
 
-1. **Which Ctp protocol the clinic actually runs.** The toggle means the build
-   is not blocked on this, but the shipped default should match your house
-   standard. TRS-398 is assumed only because it preserves current behaviour.
-2. **WU API key** — is there a personal weather station available to get a free
+1. **WU API key** — is there a personal weather station available to get a free
    official key, or ship with the public one plus an env-var override?
-3. **Scope of the web app** — address-and-pressure only, or carry Ctp and
+2. **Scope of the web app** — address-and-pressure only, or carry Ctp and
    intercomparison across too? This plan assumes all three, with the latter two
    collapsed by default.
-4. **Keep the NWS provider?** It is now redundant for the default flow, but it is
+3. **Keep the NWS provider?** It is now redundant for the default flow, but it is
    a useful independent cross-check and a fallback if the WU key dies.
-5. **"Table method" reading** — confirm the §2.4(c) note: barometric formula, or
-   a specific published lookup table you already use?
+
+Everything else is specified. The remaining three are all "which way do you want
+it", not "how would this work" — none of them block starting Phase 0.
 
 ## 9. Explicitly out of scope
 
