@@ -4,6 +4,7 @@
 **Drafted:** 2026-09-08 · **Revised:** 2026-09-08 (geocoding, elevation,
 barometric formula, Ctp toggle defaulting to TG-51)
 **Revised:** 2026-09-08 (protocol auto-selection by country, calculation trace)
+**Revised:** 2026-09-09 (WU public key primary, Open-Meteo + NWS fallbacks, two-panel layout)
 
 ## 1. Goal
 
@@ -28,6 +29,12 @@ the tool **shows its whole chain of reasoning** (§5.5): the address as entered
 and as resolved, the coordinates, the elevation and its source, the station and
 its distance, and every formula with its actual values substituted in — all with
 links back to the sources.
+
+**Sources.** Weather Underground is the primary provider for everyone, reached
+through the public key its own site uses (§3.1). Because that key carries no
+guarantee, two keyless fallbacks ship alongside it from day one: **Open-Meteo**
+worldwide, and **NWS** for US addresses. Whichever answers is named on the
+result.
 
 **New runtime dependency:** `geopy` (for Nominatim and Photon geocoding).
 `beautifulsoup4` / `soupsieve` are *removed* — the scraping they supported is
@@ -187,28 +194,95 @@ certificate store and reaches these hosts correctly. All results are live
 responses, not assumptions — but re-confirm reachability from whatever host you
 finally deploy to.
 
-### 3.1 The WU API key question — needs your decision
+### 3.1 The WU API key — DECIDED (options 2 + 3)
 
-The working key I used (`e1f10a1e...`) is the one Weather Underground's *own
-website* embeds in its JavaScript. It works, and it is already public, but:
+WU's API is not publicly available: the free PWS key requires *contributing* a
+personal weather station, which the clinic does not have. Option 1 is therefore
+off the table, and the public-key route becomes the primary method rather than a
+convenience.
 
-- Using it from a server is a grey area under WU's terms.
-- It can rotate without notice, or get IP-rate-limited.
+**Adopted: options 2 + 3 together.**
 
-Options, in the order I would suggest considering them:
+- **(2) The public key is primary.** `e1f10a1e...` — the key Weather
+  Underground's own website embeds in its JavaScript — is what ships, injected
+  via a `WU_API_KEY` environment variable so a real key can replace it later
+  without a code change.
+- **(3) Providers are pluggable, with automatic fallback.** Because the primary
+  route depends on a key that can rotate or be IP-rate-limited without notice,
+  the fallbacks are not a nice-to-have — they are what keeps the tool working on
+  the day the key stops. They must be built in the same phase, not deferred.
 
-1. **Register a free WU PWS API key.** Clean and supported — but WU grants these
-   to people who *contribute* a personal weather station. If the clinic does not
-   run one, this is a barrier.
-2. **Ship WU as the default (as you asked), key injected via a `WU_API_KEY`
-   environment variable**, defaulting to the public one, with a documented
-   fallback provider if it starts failing.
-3. **Make the provider pluggable** so Open-Meteo (no key, worldwide, no ToS
-   friction) or NWS can take over automatically on failure.
+The honest framing for the README: this is the same request the WU website makes
+from a browser. It works today; it carries no uptime guarantee; the tool degrades
+to a keyless source rather than failing when it stops.
 
-The plan below assumes **2 + 3**: WU is the default everywhere, the key is
-configurable, and the abstraction makes a fallback a config change rather than a
-rewrite.
+### 3.1.1 Provider chain — all three verified live
+
+| # | Provider | Coverage | Key? | Returns | Verified |
+|---|---|---|---|---|---|
+| 1 | **Weather Underground PWS** | worldwide | public key | sea-level pressure, station elev, `qcStatus` | ✅ §3 |
+| 2 | **Open-Meteo** | worldwide | **none** | `pressure_msl` + `surface_pressure` + grid elevation | ✅ below |
+| 3 | **NWS** | US only | **none** | altimeter setting (see the trap below) | ✅ below |
+
+**The unifying abstraction: every provider's only job is to return `P_msl`.**
+The elevation correction is provider-independent and happens once, in
+`physics.py`, against the user's own elevation. This keeps the §5.5 trace
+identical in shape no matter which source answered, and means adding a fourth
+provider later never touches the maths.
+
+**Open-Meteo** (`api.open-meteo.com/v1/forecast`) returns, in a single keyless
+request: `pressure_msl`, `surface_pressure`, **and** the grid elevation. Live at
+the test point: `pressure_msl = 1022.6 hPa`, `surface_pressure = 1010.8 hPa`,
+`elevation = 99.0 m`. Because it also serves the elevation API from §3.3, it
+covers **both** halves of the fallback in one dependency, worldwide, with no key
+and no ToS friction. That makes it the first fallback for everyone.
+
+> **A useful accident:** passing `&elevation=<metres>` makes Open-Meteo
+> recompute `surface_pressure` for *that* elevation. So it will do our
+> correction for us — which gives an independent check on §5.3's formula. At
+> 99 m our formula lands within **0.014%** of theirs; at 325 m, within
+> **0.060%** (0.44 mmHg). Two independent implementations agreeing to under a
+> tenth of a percent is good evidence the formula is right. We still use *our*
+> formula as the single correction path so the trace reads the same for every
+> provider — but the Open-Meteo value is worth keeping as a regression test.
+
+**NWS** (`api.weather.gov`): `/points/{lat},{lon}` → `observationStations` →
+`/stations/{id}/observations/latest`.
+
+⚠️ **A trap worth the whole investigation.** The field named
+`barometricPressure` is **not station pressure** despite its name — it is the
+**altimeter setting**, i.e. already sea-level adjusted. Verified by checking
+high-elevation stations, where the two readings cannot be confused:
+
+| Station | Elevation | `barometricPressure` | If read as station pressure → implied MSL |
+|---|---:|---:|---|
+| KJFK | 3 m | 1024.04 hPa | 1024 hPa — ambiguous at sea level |
+| KDYL | 120 m | 1023.71 hPa | 1038 hPa — suspicious |
+| KABQ | 1631 m | 1026.41 hPa | **1250 hPa — impossible** |
+| KLXV (Leadville) | 3026 m | 1037.93 hPa | **1505 hPa — impossible** |
+
+Taken literally at Leadville the error is **+47%**. Read correctly as an
+altimeter setting it implies a station pressure of 715.8 hPa, which is right for
+3000 m. A sea-level-only test would never have caught this, which is why the
+high-elevation check was worth doing.
+
+Two more NWS facts that shape the implementation:
+
+- **`seaLevelPressure` was `null` at all four stations tested** (`qualityControl:
+  "Z"`). It cannot be relied on; use `barometricPressure` and treat it as MSL.
+- **KDEN returned no `barometricPressure` at all.** Null readings are normal, so
+  the provider must walk down the `observationStations` list rather than trusting
+  the first entry, and honour the `qualityControl` flag (`"V"` = validated).
+
+**Cross-validation.** Normalised to MSL and corrected to the same user point,
+NWS and Open-Meteo agree to **0.109%** (0.82 mmHg, ~0.11% in Ctp) — comfortably
+inside the noise this tool is trying to remove, and a good routine sanity check
+once both are built.
+
+**Fallback policy.** WU → Open-Meteo → NWS (US only). Falling back is never
+silent: it raises a `warning` on the result and is written into the §5.5 trace,
+so a user always knows which source produced their number and that the preferred
+one was unavailable.
 
 ### 3.2 Geocoder — address to lat/lon
 
@@ -298,10 +372,10 @@ nws_pressure_correction/
 │   ├── elevation.py       # lat, lon    -> elevation_ft + source  (USGS -> Open-Meteo -> OpenTopo)
 │   ├── physics.py         # PURE. no network, no I/O. fully unit-tested.
 │   ├── providers/
-│   │   ├── base.py          # Protocol: nearest_station(), current_observation()
-│   │   ├── wunderground.py  # DEFAULT
-│   │   ├── nws.py           # fallback, US only
-│   │   └── openmeteo.py     # fallback, worldwide, keyless
+│   │   ├── base.py          # Protocol: every provider returns P_msl + metadata
+│   │   ├── wunderground.py  # PRIMARY   - public key, worldwide
+│   │   ├── openmeteo.py     # FALLBACK 1 - keyless, worldwide, also serves elevation
+│   │   └── nws.py           # FALLBACK 2 - keyless, US only, altimeter-setting quirk
 │   └── service.py         # pressure_for_address(addr) -> PressureResult  <-- the seam
 ├── cli.py                 # thin; keeps today's interactive flow working
 ├── web/app.py             # thin; Streamlit or Flask
@@ -331,11 +405,13 @@ class PressureResult:
     lon: float
     country_code: str | None   # drives the §5.4 protocol auto-selection
     geocoder: str              # which of the chain answered
-    # which station, and how far away — always shown, never hidden
-    station_id: str
-    station_name: str
-    station_distance_mi: float
-    station_elev_ft: float
+    # where the pressure came from — always shown, never hidden
+    provider: str              # "wunderground" | "openmeteo" | "nws"
+    provider_fallback: bool    # True if the primary was unavailable
+    station_id: str | None     # None for Open-Meteo, which is a model grid not a station
+    station_name: str | None
+    station_distance_mi: float | None
+    station_elev_ft: float | None   # displayed, but NOT used in the correction
     obs_time_utc: datetime
     obs_age_minutes: float
     # the site's own elevation, and where that number came from
@@ -350,20 +426,25 @@ class PressureResult:
     pressure_station_pa: float
     pressure_station_mmhg_linear: float   # legacy cross-check, §5.3
     method: Method
-    # Ctp protocol: what was used, and how it got chosen (§5.4)
-    ctp_protocol: CtpProtocol
-    ctp_protocol_source: str    # "auto" | "manual" | "env"
-    ctp_protocol_reason: str    # human-readable, always displayed
+    # Ctp protocol: suggested here, applied in the Ctp panel (§5.4)
+    suggested_ctp_protocol: CtpProtocol   # from country_code; the panel-2 default
+    suggested_ctp_reason: str             # human-readable, displayed in panel 2
     # provenance and honesty (§5.5)
     trace: list[TraceStep]
     source_urls: dict[str, str]
     warnings: list[str]
 ```
 
-Note that `PressureResult` deliberately holds no Ctp *value*. Ctp depends on a
-temperature the user supplies afterwards, and on a protocol they can flip at any
-time — keeping it out means the override in §5.4 recomputes from cached data
-instead of re-running the whole chain.
+Note that `PressureResult` deliberately holds no Ctp *value*, and only a
+*suggested* protocol. Ctp depends on a temperature the user supplies afterwards
+and on a protocol they can flip at any time, so both live in the Ctp panel
+(§5.4). Keeping them out of this dataclass is what lets panel 1 stand alone as
+"the pressure at this address" and lets the panel-2 override recompute from
+cached values instead of re-running the whole chain.
+
+A second `CtpResult` dataclass carries what panel 2 produces —
+`ctp`, `temperature_c`, `protocol`, `protocol_source`
+(`"auto"` | `"manual"` | `"env"`), `protocol_reason`, and its own trace steps.
 
 `warnings` carries the things a user must not miss: station is 14 miles away,
 observation is 3 hours stale, `qcStatus` is −1, elevation fell back to the
@@ -534,13 +615,21 @@ so it should be the loudest line in the release notes.
 
 Surfaced in both front ends:
 
-- **Web:** a two-option radio directly above the Ctp result —
-  `(•) 22 °C — AAPM TG-51` / `( ) 20 °C — IAEA TRS-398`, pre-selected by
-  `auto_protocol()` and annotated with its reason. Changing it re-renders from
-  cached values. Selection persists in session state.
+- **Web — in the Ctp panel only (panel 2), not the pressure panel.** A two-option
+  radio directly above the Ctp result: `(•) 22 °C — AAPM TG-51` /
+  `( ) 20 °C — IAEA TRS-398`, pre-selected from `suggested_ctp_protocol` and
+  annotated with its reason. Changing it re-renders from cached values.
+  Selection persists in session state.
 - **CLI:** `--protocol {tg-51,trs-398}` overrides; omitted, it auto-selects and
   prints the reason.
 - **Config:** `BAROME_CTP_PROTOCOL` pins a site's house standard.
+
+**Panel placement.** The toggle belongs with the Ctp calculation because it only
+affects Ctp — it has no bearing whatsoever on the corrected pressure. Putting it
+in panel 1 would imply the pressure depends on the protocol, which it does not,
+and would clutter the one answer most users came for. Panel 1 is the pressure at
+your address, full stop; panel 2 is where a clinical convention gets chosen, next
+to the number it changes. See §5.6 for the full layout.
 
 The protocol appears in every rendering, never as a bare number. The failure mode
 being designed out is a physicist reading a Ctp without knowing which reference
@@ -580,7 +669,7 @@ from the verified test point:
    Resolved to : Doylestown, Bucks County, Pennsylvania, 18901, United States
    Geocoder    : US Census (exact street match)
    Coordinates : 40.30700, -75.14800
-   Country     : US  ->  selects AAPM TG-51
+   Country     : US   (suggests AAPM TG-51 in the Ctp panel - see step 7)
    [verify]      https://geocoding.geo.census.gov/geocoder/...
 
 2. YOUR ELEVATION  (at your address, not the station's)
@@ -588,7 +677,8 @@ from the verified test point:
    Source      : USGS EPQS, NED 1 m dataset
    [verify]      https://epqs.nationalmap.gov/v1/json?x=-75.148&y=40.307...
 
-3. WEATHER STATION
+3. PRESSURE SOURCE
+   Provider    : Weather Underground  (primary)
    Station     : KPADOYLE21 "Doylestown Boro Fairgrounds"
    Distance    : 0.7 mi from your address
    Station elev: 380 ft   (not used in the calculation - shown for comparison)
@@ -596,7 +686,7 @@ from the verified test point:
    Quality     : qcStatus 1 (passed)
    [verify]      https://www.wunderground.com/dashboard/pws/KPADOYLE21
 
-4. REPORTED PRESSURE  (sea-level adjusted, as WU publishes it)
+4. REPORTED PRESSURE  (sea-level adjusted - every provider normalises to this)
    P_msl       : 30.28 inHg
 
 5. ELEVATION CORRECTION  (standard-atmosphere barometric formula)
@@ -610,6 +700,9 @@ from the verified test point:
 6. YOUR PRESSURE, IN OTHER UNITS
    760.11 mmHg | 29.926 inHg | 1013.40 hPa | 101.340 kPa | 101340 Pa
 
+--- steps 1-6 are panel 1: the pressure at your address. -------------------
+--- step 7 is panel 2, and only appears once you enter a temperature. ------
+
 7. Ctp
    Protocol    : AAPM TG-51, 22.0 C reference  [auto-selected: country = US]
    Your temp   : 21.5 C
@@ -620,7 +713,7 @@ from the verified test point:
    If TRS-398 (20.0 C) were selected instead: 1.0050   (+0.68%)
 ```
 
-Four deliberate choices in that layout:
+Five deliberate choices in that layout:
 
 - **Formulas are shown with the actual numbers substituted**, not just symbolically
   and not just as a result. A physicist can check any line with a calculator,
@@ -632,6 +725,18 @@ Four deliberate choices in that layout:
   removes any doubt about the §2.4(d) default change.
 - **Every external fact carries its verify link.** Station and elevation links are
   human-readable pages where possible, not raw API URLs.
+- **The provider is named in step 3, and a fallback says so.** If WU was
+  unavailable and Open-Meteo answered, step 3 reads
+  `Provider : Open-Meteo (fallback - Weather Underground unavailable)`, with the
+  same line raised as a warning. A number from a different source than usual
+  should never look identical to one from the usual source.
+
+When a fallback provider answers, step 3 shapes itself to what that source
+actually is. Open-Meteo is a model grid, not a station, so it reports its grid
+cell and resolution instead of a station id and distance — the trace should not
+invent a station that does not exist. The NWS variant names the observing
+station and notes that its `barometricPressure` field is being read as an
+altimeter setting, per §3.1.1.
 
 **Export.** A "copy as text" button (and `--trace` on the CLI) emits exactly the
 block above, timestamped, for pasting into a QA log. Clinics keep records; the
@@ -640,6 +745,57 @@ tool should hand them something paste-ready rather than making them retype it.
 **Warnings render inline, at the step they belong to**, not collected in a
 footer — a station 14 miles away or a 3-hour-old observation is flagged in
 step 3 where the user is already looking.
+
+### 5.6 Web app layout — two panels
+
+The split is by *what the user is asking for*, and the rule is that panel 1 must
+be complete and correct on its own for someone who only wants the pressure.
+
+```
+┌─ PANEL 1 ─ PRESSURE ──────────────────────────────────────────┐
+│  Address:  [ 123 Main St, Doylestown PA 18901        ] [Go]   │
+│                                                               │
+│      760.11 mmHg                                              │
+│      at 123 Main St, Doylestown PA 18901 (325 ft)             │
+│      Weather Underground - KPADOYLE21, 0.7 mi - 14 min ago    │
+│                                                               │
+│      29.926 inHg | 1013.40 hPa | 101.340 kPa | 101340 Pa      │
+│                                                               │
+│  ▾ Show your work                    [copy as text]           │
+│      steps 1-6 of the §5.5 trace                              │
+└───────────────────────────────────────────────────────────────┘
+
+┌─ PANEL 2 ─ Ctp  (optional) ───────────────────────────────────┐
+│  Temperature:  [ 21.5 ] °C                                    │
+│                                                               │
+│  Reference protocol:                                          │
+│    (•) 22 °C - AAPM TG-51        auto-selected: address is US │
+│    ( ) 20 °C - IAEA TRS-398                                   │
+│                                                               │
+│      Ctp = 0.9982        (TG-51, 22 °C reference)             │
+│      with TRS-398 instead: 1.0050  (+0.68%)                   │
+│                                                               │
+│  ▾ Show your work                                             │
+│      step 7 of the §5.5 trace                                 │
+└───────────────────────────────────────────────────────────────┘
+
+┌─ PANEL 3 ─ Intercomparison  (optional) ───────────────────────┐
+│  as today: absolute and percent differences                   │
+└───────────────────────────────────────────────────────────────┘
+```
+
+Consequences worth stating, because they constrain the implementation:
+
+- **Panel 1 never mentions a protocol**, since none is involved in producing that
+  number. Its trace ends at step 6.
+- **Panel 2 does not re-fetch anything.** It reads the cached `PressureResult`,
+  so both the temperature and the protocol radio recompute instantly. This is the
+  reason `PressureResult` holds no Ctp value (§4).
+- **Panels 2 and 3 stay collapsed until used.** A user who wants only the
+  pressure sees only panel 1 and is done.
+- **Each panel exports its own trace**, and the top-level "copy as text" emits
+  whichever panels the user has actually filled in — a pressure-only lookup
+  should not paste a Ctp section into the QA log.
 
 ---
 
@@ -672,28 +828,45 @@ nothing. This is the phase that delivers "the user types only their address".
 Capture `country_code` here — normalised with `.upper()`, with a test covering
 Nominatim's lowercase `us` — since §5.4's auto-selection depends on it.
 
-**Phase 3 — replace scraping with the WU API** *(~2 h)*
-Build `providers/wunderground.py` on the two verified endpoints from §3. Retire
-the BeautifulSoup selectors and `soup_check()`; drop `bs4` / `soupsieve` from
-requirements. Fixes bug #2 and the fragility in §2.4(a).
+**Phase 3 — providers: WU primary, two keyless fallbacks** *(~4 h)*
+Build `providers/base.py` around the §3.1.1 contract — *every provider returns
+`P_msl` plus metadata; none of them does the elevation correction*. Then:
+
+- `wunderground.py` (primary) on the two verified endpoints, key from
+  `WU_API_KEY` defaulting to the public one.
+- `openmeteo.py` (fallback 1, worldwide, keyless) reading `pressure_msl`.
+- `nws.py` (fallback 2, US only, keyless) reading `barometricPressure`
+  **as an altimeter setting**, walking down `observationStations` past null
+  readings, and honouring `qualityControl`.
+
+All three ship together: the fallbacks are what keeps the tool alive when the
+public key stops, so deferring them would leave the primary path unprotected.
+Retire the BeautifulSoup selectors and `soup_check()`; drop `bs4` / `soupsieve`.
+Fixes bug #2 and the fragility in §2.4(a).
+
+Tests that matter here: the Leadville case from §3.1.1, asserting the NWS
+provider yields ~716 hPa station pressure rather than a 1505 hPa MSL; and the
+cross-provider agreement check (WU vs Open-Meteo vs NWS at one point, expected
+within ~0.2%), which catches a provider silently changing its units or
+reference.
 
 **Phase 4 — the service seam** *(~1 h)*
 Write `service.py` implementing the §4 contract, including the elevation
 correctness fix from §2.4(b): use the **address's** elevation from `elevation.py`,
 never the station's, and emit a `warning` if it ever has to fall back to the
-station figure. Assemble the §5.5 `TraceStep` list as the chain runs — each
-stage appends its own step, so the trace cannot drift out of sync with the
-calculation that produced it. Wire up `auto_protocol()` (§5.4). Rewrite `cli.py`
+station figure. Add the provider fallback chain with its warnings. Assemble the
+§5.5 `TraceStep` list as the chain runs — each stage appends its own step, so the
+trace cannot drift out of sync with the calculation that produced it. Wire up
+`auto_protocol()` (§5.4) to populate `suggested_ctp_protocol`. Rewrite `cli.py`
 as a thin caller — one address prompt, plus `--protocol` and `--trace`.
 Fixes bugs #1, #3, #4, #5.
 
 **Phase 5 — the web app** *(~4 h)*
-One text input, one button, one results card: the corrected pressure large and
-first, then the unit table. Below it the §5.5 trace panel, expanded by default,
-rendering all seven steps with their verify links and a "copy as text" button.
-Second panel for Ctp — temperature input plus the §5.4 protocol radio,
-pre-selected from country with its reason shown, recomputing locally on
-override — and intercomparison, preserving today's features.
+Build the three panels of §5.6. Panel 1 is address in, pressure out, with steps
+1-6 of the trace and no mention of any protocol. Panel 2 holds the temperature
+input, the TG-51/TRS-398 radio pre-selected from country, and step 7 — all
+recomputing from the cached `PressureResult` with no refetch. Panel 3 is
+intercomparison, preserving today's feature.
 
 The trace is the bulk of this phase's work and the reason the estimate moved from
 3 h to 4 h. Build it as a shared renderer taking `list[TraceStep]`, so the CLI's
@@ -747,19 +920,20 @@ CORS headers — a static build would fall back to Nominatim first instead.
   use (§2.4(d), §5.4).
 - ~~"Table method" reading~~ → confirmed as the standard-atmosphere barometric
   formula, not a published lookup chart (§2.4(c)).
+- ~~WU API key~~ → the API is not publicly available, so the public key is the
+  primary route (§3.1 options 2 + 3), with `WU_API_KEY` to override.
+- ~~Keep the NWS provider?~~ → yes, as fallback 2 for US addresses, alongside
+  Open-Meteo as the worldwide fallback 1 (§3.1.1).
+- ~~Web app scope~~ → three panels, pressure standing alone in panel 1, Ctp and
+  its protocol toggle in panel 2 (§5.6).
 
 **Still open:**
 
-1. **WU API key** — is there a personal weather station available to get a free
-   official key, or ship with the public one plus an env-var override?
-2. **Scope of the web app** — address-and-pressure only, or carry Ctp and
-   intercomparison across too? This plan assumes all three, with the latter two
-   collapsed by default.
-3. **Keep the NWS provider?** It is now redundant for the default flow, but it is
-   a useful independent cross-check and a fallback if the WU key dies.
+1. **Whether panel 3 (intercomparison) is still wanted** in the web app, or is
+   a CLI-only tool in practice. It is preserved either way; this only decides
+   whether it gets UI work in Phase 5.
 
-Everything else is specified. The remaining three are all "which way do you want
-it", not "how would this work" — none of them block starting Phase 0.
+Everything else is specified — the one remaining item does not block any phase.
 
 ## 9. Explicitly out of scope
 
