@@ -13,7 +13,7 @@ pytest.importorskip("streamlit")
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
 from barome import service  # noqa: E402
-from barome.models import PressureResult, TraceStep  # noqa: E402
+from barome.models import Location, PressureResult, TraceStep  # noqa: E402
 from barome.physics import CtpProtocol, Method  # noqa: E402
 
 APP = str(Path(__file__).resolve().parents[1] / "web" / "app.py")
@@ -54,25 +54,58 @@ def _fake_result(address: str, country="US", protocol=CtpProtocol.TG_51) -> Pres
     )
 
 
+def _candidate(label, cc="US"):
+    return Location(
+        lat=40.307,
+        lon=-75.148,
+        display_name=label,
+        source="photon",
+        confidence="exact",
+        country_code=cc,
+    )
+
+
+SUGGESTIONS = [
+    _candidate("123 S Main St, Doylestown, PA 18901, United States"),
+    _candidate("123 N Main St, Doylestown, PA 18901, United States"),
+]
+
+
 @pytest.fixture
 def app(monkeypatch):
-    """An app whose only network call is stubbed."""
+    """An app whose only network calls are stubbed."""
     calls = []
+    suggested = []
 
-    def fake(address, **kwargs):
-        calls.append(address)
+    def fake_lookup(address, **kwargs):
+        calls.append((address, kwargs.get("location")))
         return _fake_result(address)
 
-    monkeypatch.setattr(service, "pressure_for_address", fake)
+    def fake_suggest(query, *a, **kw):
+        suggested.append(query)
+        return list(SUGGESTIONS)
+
+    monkeypatch.setattr(service, "pressure_for_address", fake_lookup)
+    monkeypatch.setattr(service, "suggest_addresses", fake_suggest)
     at = AppTest.from_file(APP, default_timeout=30)
     at.calls = calls
+    at.suggested = suggested
     return at
 
 
-def _run_with_address(at, address):
+def _find(at, address):
+    """Type an address and press Find, stopping at the candidate list."""
     at.run()
     at.text_input[0].set_value(address)
     at.button[0].click().run()
+    return at
+
+
+def _run_with_address(at, address, choice=0):
+    """The whole panel-1 flow: type, find, pick a candidate, confirm."""
+    _find(at, address)
+    at.radio[0].set_value(choice).run()
+    at.button[1].click().run()
     return at
 
 
@@ -199,7 +232,79 @@ def test_a_new_address_recalculates_every_panel(app):
     app.number_input[0].set_value(21.5).run()
     _run_with_address(app, "456 Other Ave")
     assert not app.exception
-    assert app.calls == ["123 Main St", "456 Other Ave"]
+    assert [address for address, _ in app.calls] == ["123 Main St", "456 Other Ave"]
     shown = [e.value for e in app.markdown] + [e.value for e in app.caption]
     assert any("456 Other Ave" in text for text in shown)
     assert not any("123 Main St" in text for text in shown)
+
+
+# --- The address picker ---------------------------------------------------
+
+
+def test_find_offers_candidates_before_looking_anything_up(app):
+    _find(app, "123 Main St")
+    assert not app.exception
+    assert app.suggested == ["123 Main St"]
+    assert app.calls == []  # nothing looked up until a candidate is confirmed
+    labels = app.radio[0].options
+    assert "123 S Main St, Doylestown, PA 18901, United States" in labels
+
+
+def test_the_last_option_always_escapes_the_suggestion_service(app):
+    """OpenStreetMap does not know every address; in the US the Census
+    geocoder often does. The picker must never be a dead end."""
+    _find(app, "123 Main St")
+    assert app.radio[0].options[-1] == "None of these - use exactly what I typed"
+
+
+def test_confirming_a_candidate_passes_it_through_so_nothing_is_geocoded_twice(app):
+    _run_with_address(app, "123 Main St", choice=1)
+    address, location = app.calls[0]
+    assert address == "123 Main St"
+    assert location is not None
+    assert location.display_name == "123 N Main St, Doylestown, PA 18901, United States"
+
+
+def test_choosing_none_of_these_falls_back_to_the_full_geocoder_chain(app):
+    _find(app, "123 Main St")
+    app.radio[0].set_value(len(SUGGESTIONS)).run()
+    app.button[1].click().run()
+    assert not app.exception
+    address, location = app.calls[0]
+    assert location is None  # service.geocode() decides, Census first
+
+
+def test_the_picker_collapses_once_an_address_is_confirmed(app):
+    _run_with_address(app, "123 Main St")
+    assert app.radio.values == []
+    assert app.metric[0].value == "760.11 mmHg"
+
+
+def test_changing_the_address_clears_the_candidate_list_too(app):
+    """A candidate list belonging to a different query is exactly as wrong as
+    a result belonging to a different address."""
+    _find(app, "123 Main St")
+    assert len(app.radio) == 1
+    app.text_input[0].set_value("456 Other Ave").run()
+    assert app.radio.values == []
+    assert any("press **Find address**" in i.value for i in app.info)
+
+
+def test_no_suggestions_still_allows_a_direct_lookup(app, monkeypatch):
+    monkeypatch.setattr(service, "suggest_addresses", lambda q, *a, **kw: [])
+    _find(app, "Somewhere OSM has never heard of")
+    assert any("No suggestions matched" in w.value for w in app.warning)
+    app.button[1].click().run()
+    assert not app.exception
+    assert app.calls[0][1] is None
+
+
+def test_an_unreachable_suggestion_service_is_reported_not_swallowed(app, monkeypatch):
+    from barome.errors import GeocodingError
+
+    def boom(query, *a, **kw):
+        raise GeocodingError("Could not reach photon")
+
+    monkeypatch.setattr(service, "suggest_addresses", boom)
+    _find(app, "123 Main St")
+    assert any("Could not reach photon" in e.value for e in app.error)

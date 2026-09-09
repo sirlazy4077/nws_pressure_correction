@@ -66,23 +66,80 @@ address = st.text_input(
     placeholder="123 Main St, Doylestown PA 18901",
     label_visibility="collapsed",
 )
-go = st.button("Go", type="primary")
+find = st.button("Find address", type="primary")
 
 # Changing the address invalidates everything downstream. Panels 2 and 3 derive
 # from the stored result and are recomputed on every rerun, so dropping a
 # result whose address no longer matches the box is what guarantees no panel
-# can display a number belonging to a previous address.
+# can display a number belonging to a previous address. The candidate list is
+# dropped on the same rule, so it can never belong to a different query either.
 stored = st.session_state.get("result")
 if stored is not None and stored.address_query != address:
     del st.session_state["result"]
+if st.session_state.get("candidates_for") not in (None, address):
+    st.session_state.pop("candidates", None)
+    st.session_state.pop("candidates_for", None)
 
-if go and address.strip():
-    with st.spinner("Locating, then reading the nearest station..."):
+if find and address.strip():
+    st.session_state.pop("result", None)
+    with st.spinner("Looking for matching addresses..."):
         try:
-            st.session_state["result"] = service.pressure_for_address(address)
+            st.session_state["candidates"] = service.suggest_addresses(address)
+            st.session_state["candidates_for"] = address
+        except BaromeError as exc:
+            st.session_state.pop("candidates", None)
+            st.error(str(exc))
+
+
+def _lookup(chosen):
+    """Run panel 1 for a confirmed candidate, or for the raw text."""
+    with st.spinner("Reading the nearest station..."):
+        try:
+            st.session_state["result"] = service.pressure_for_address(
+                address, location=chosen
+            )
         except BaromeError as exc:
             st.session_state.pop("result", None)
             st.error(str(exc))
+            return
+    # The picker was rendered earlier in this same run, so without a rerun it
+    # would linger above the answer it has already produced.
+    st.rerun()
+
+
+candidates = st.session_state.get("candidates")
+
+# The picker is the address validation step: you confirm a real, resolved
+# address instead of trusting that what you typed landed somewhere sensible.
+if candidates is not None and st.session_state.get("result") is None:
+    if candidates:
+        AS_TYPED = len(candidates)
+        choice = st.radio(
+            "Did you mean:",
+            options=list(range(len(candidates) + 1)),
+            format_func=lambda i: (
+                "None of these - use exactly what I typed"
+                if i == AS_TYPED
+                else candidates[i].display_name
+            ),
+            key="candidate_choice",
+        )
+        st.caption(
+            "Suggestions come from Photon/OpenStreetMap, which does not know every "
+            "address. If yours is missing, the last option runs the full geocoder "
+            "chain on your text - in the US that reaches the Census geocoder, which "
+            "often has addresses OpenStreetMap does not."
+        )
+        if st.button("Use this address"):
+            _lookup(None if choice == AS_TYPED else candidates[choice])
+    else:
+        st.warning(
+            "No suggestions matched that text. You can still look it up directly - "
+            "the full geocoder chain knows addresses the suggestion service does not.",
+            icon="⚠️",
+        )
+        if st.button("Look it up anyway"):
+            _lookup(None)
 
 result = st.session_state.get("result")
 
@@ -90,7 +147,8 @@ ctp_result = None
 comparison = None
 
 if result is None:
-    st.info("Enter an address and press **Go**.")
+    if candidates is None:
+        st.info("Enter an address and press **Find address**.")
 else:
     st.metric(
         label="Station pressure at your address",

@@ -189,3 +189,116 @@ def test_a_street_without_a_number_is_interpolated(monkeypatch):
 def test_a_town_level_hit_is_approximate(monkeypatch):
     _nominatim(monkeypatch, {"address": {"city": "Lisboa", "country_code": "pt"}})
     assert geo.geocode_nominatim("Lisboa").confidence == "approximate"
+
+
+# --- Suggestions (the address picker) ------------------------------------
+
+
+def _feature(lon, lat, **props):
+    return {"geometry": {"coordinates": [lon, lat]}, "properties": props}
+
+
+PHOTON_SUGGESTIONS = {
+    "features": [
+        _feature(
+            -77.0366, 38.8976,
+            housenumber="1600", street="Pennsylvania Avenue Northwest",
+            city="Washington", state="DC", postcode="20500",
+            country="United States", countrycode="US", osm_key="office",
+        ),
+        # Photon returns the same address more than once when several OSM
+        # objects sit on it - a shop and the building it is in, say.
+        _feature(
+            -77.0366, 38.8976,
+            housenumber="1600", street="Pennsylvania Avenue Northwest",
+            city="Washington", state="DC", postcode="20500",
+            country="United States", countrycode="US", osm_key="shop",
+        ),
+        _feature(
+            -75.1658, 39.9598,
+            street="Carlton Street", city="Philadelphia", state="Pennsylvania",
+            postcode="19103", country="United States", countrycode="US",
+        ),
+        _feature(
+            -9.1374, 38.7101,
+            name="Lisboa", city="Lisboa", country="Portugal", countrycode="pt",
+        ),
+    ]
+}
+
+
+@pytest.fixture(autouse=True)
+def _clear_suggest_cache():
+    geo._suggest_cached.cache_clear()
+    yield
+    geo._suggest_cached.cache_clear()
+
+
+def test_suggestions_are_deduplicated(monkeypatch):
+    """The user should not be asked to choose between two identical lines."""
+    monkeypatch.setattr(geo, "get_json", lambda url, **kw: PHOTON_SUGGESTIONS)
+    results = geo.suggest("1600 Pennsy")
+    labels = [r.display_name for r in results]
+    assert len(labels) == len(set(labels))
+    assert len(results) == 3
+
+
+def test_a_suggestion_arrives_fully_resolved(monkeypatch):
+    """Photon returns coordinates and country with the candidate, so
+    confirming one costs no second lookup."""
+    monkeypatch.setattr(geo, "get_json", lambda url, **kw: PHOTON_SUGGESTIONS)
+    top = geo.suggest("1600 Pennsy")[0]
+    assert top.lat == pytest.approx(38.8976)
+    assert top.lon == pytest.approx(-77.0366)
+    assert top.country_code == "US"
+    assert top.source == "photon"
+
+
+def test_suggestion_labels_read_as_an_address(monkeypatch):
+    monkeypatch.setattr(geo, "get_json", lambda url, **kw: PHOTON_SUGGESTIONS)
+    labels = [r.display_name for r in geo.suggest("1600 Pennsy")]
+    assert labels[0] == (
+        "1600 Pennsylvania Avenue Northwest, Washington, DC, 20500, United States"
+    )
+    # A city-level hit must not repeat itself as "Lisboa, Lisboa, Portugal".
+    assert labels[2] == "Lisboa, Portugal"
+
+
+def test_suggestion_confidence_tracks_how_specific_the_hit_is(monkeypatch):
+    monkeypatch.setattr(geo, "get_json", lambda url, **kw: PHOTON_SUGGESTIONS)
+    results = geo.suggest("1600 Pennsy")
+    assert results[0].confidence == "exact"  # has a house number
+    assert results[1].confidence == "interpolated"  # street only
+    assert results[2].confidence == "approximate"  # city only
+
+
+def test_a_country_code_from_a_suggestion_is_normalised(monkeypatch):
+    monkeypatch.setattr(geo, "get_json", lambda url, **kw: PHOTON_SUGGESTIONS)
+    assert geo.suggest("1600 Pennsy")[2].country_code == "PT"  # photon sent "pt"
+
+
+@pytest.mark.parametrize("query", ["", "  ", "ab", "abc"])
+def test_a_query_too_short_to_mean_anything_is_not_sent(monkeypatch, query):
+    """Two characters match half the planet and waste a request on a service
+    that costs nothing and asks for fair use."""
+    monkeypatch.setattr(geo, "get_json", lambda url, **kw: pytest.fail("should not be called"))
+    assert geo.suggest(query) == []
+
+
+def test_an_unreachable_suggestion_service_raises_rather_than_looking_empty(monkeypatch):
+    """Empty means 'no such address'. A network failure must not masquerade
+    as that."""
+    from barome.net import HttpError
+
+    def boom(url, **kw):
+        raise HttpError("Could not reach photon")
+
+    monkeypatch.setattr(geo, "get_json", boom)
+    with pytest.raises(GeocodingError):
+        geo.suggest("1600 Pennsy")
+
+
+def test_a_feature_with_no_coordinates_is_skipped(monkeypatch):
+    payload = {"features": [{"properties": {"name": "Nowhere"}}, *PHOTON_SUGGESTIONS["features"]]}
+    monkeypatch.setattr(geo, "get_json", lambda url, **kw: payload)
+    assert all(r.lat is not None for r in geo.suggest("1600 Pennsy"))

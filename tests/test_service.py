@@ -399,3 +399,42 @@ def test_the_export_includes_only_the_panels_that_were_filled_in(wired):
     everything = render_full_trace(result, ctp_result, comparison)
     assert "7. Ctp" in everything
     assert "8. INTERCOMPARISON" in everything
+
+
+# --- A confirmed address skips the geocoder chain -------------------------
+
+
+def test_a_confirmed_candidate_is_not_geocoded_again(wired, monkeypatch):
+    """A suggestion arrives fully resolved, so confirming one must not spend a
+    second lookup - nor risk the chain resolving it somewhere else."""
+    monkeypatch.setattr(
+        service.geocode_mod,
+        "geocode",
+        lambda addr, chain: pytest.fail("should not geocode a confirmed address"),
+    )
+    picked = _location(cc="PT", source="photon")
+    result = service.pressure_for_address("Rua Augusta 100", location=picked)
+    assert result.lat == picked.lat
+    assert result.resolved_address == picked.display_name
+    assert result.suggested_ctp_protocol is CtpProtocol.TRS_398
+
+
+def test_a_confirmed_address_says_so_in_the_trace(wired):
+    picked = _location(source="photon")
+    result = service.pressure_for_address("123 Main St", location=picked)
+    step = next(s for s in result.trace if s.stage == "geocode")
+    assert "confirmed by you" in step.provider
+    assert "confirmed by the user" in step.note
+
+
+def test_a_confirmed_address_is_not_second_guessed(wired):
+    """Warning that an address 'only matched approximately' after the user has
+    read it in full and chosen it trains them to ignore the warning."""
+    picked = _location(confidence="approximate", source="photon")
+    result = service.pressure_for_address("Doylestown", location=picked)
+    assert not any("only matched approximately" in w for w in result.warnings)
+
+    # But an unconfirmed one still is.
+    wired["location"] = _location(confidence="approximate")
+    unconfirmed = service.pressure_for_address("Doylestown")
+    assert any("only matched approximately" in w for w in unconfirmed.warnings)

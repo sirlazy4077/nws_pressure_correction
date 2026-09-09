@@ -763,7 +763,13 @@ be complete and correct on its own for someone who only wants the pressure.
 
 ```
 ┌─ PANEL 1 ─ PRESSURE ──────────────────────────────────────────┐
-│  Address:  [ 123 Main St, Doylestown PA 18901        ] [Go]   │
+│  Address:  [ 123 Main St, Doyle          ] [Find address]     │
+│                                                               │
+│  Did you mean:           (§5.8 - shown until one is picked)   │
+│    (•) 123 S Main St, Doylestown, PA 18901, United States      │
+│    ( ) 123 N Main St, Doylestown, PA 18901, United States      │
+│    ( ) None of these - use exactly what I typed                │
+│                                         [Use this address]     │
 │                                                               │
 │      760.11 mmHg                                              │
 │      at 123 Main St, Doylestown PA 18901 (325 ft)             │
@@ -939,6 +945,74 @@ and stops.
 
 ---
 
+### 5.8 Address confirmation — the picker
+
+**The problem.** A geocoder that silently resolves a typo'd address to somewhere
+40 miles away is the most likely way this tool produces a confidently wrong
+number (§5.1). Echoing the match back afterwards helps, but by then the user has
+already been given an answer, and people believe answers. Confirming *before*
+the lookup turns validation into a choice the user makes rather than a warning
+they might skim.
+
+**The service.** Photon, which is already in the §3.2 chain.
+
+| Candidate | Suitable for suggestions? |
+|---|---|
+| **Photon** (Komoot) | ✅ built as a search-as-you-type geocoder; keyless, worldwide, CORS |
+| Nominatim | ❌ its usage policy **prohibits autocomplete and type-ahead outright** |
+| US Census | ❌ no suggest endpoint — it answers a whole address or nothing |
+| Geoapify / LocationIQ / Mapbox / Google Places | ❌ all require an API key |
+
+Verified live on partial queries: `1600 Pennsy` returns both Pennsylvania Avenue
+addresses in Washington DC with postcodes and country; `Rua Augusta 100, Lis`
+returns the Lisbon address with `countrycode` `pt`.
+
+**A suggestion is a resolved `Location`, not a string.** Photon returns the
+coordinates and the country code with each candidate, so confirming one costs
+**no second lookup**, and the country that drives the §5.4 protocol
+auto-selection is already known. `pressure_for_address(address, location=...)`
+takes the confirmed candidate and skips the geocode stage, recording in the
+trace that the address was confirmed by the user.
+
+```python
+SUGGEST_LIMIT = 5
+
+def suggest(query: str, limit: int = SUGGEST_LIMIT) -> list[Location]:
+    """Candidates for a partial query, best first. [] if the query is too
+    short to be meaningful; raises GeocodingError only if Photon is
+    unreachable."""
+```
+
+Four details that are most of the value:
+
+- **The list always ends with "None of these — use exactly what I typed."**
+  OpenStreetMap does not know every address, and in the US the Census geocoder
+  frequently has ones it does not. Without that escape the picker becomes a dead
+  end for exactly the rural and new-build addresses most likely to need it.
+- **Duplicates are removed.** Photon returns the same address once per OSM
+  object sitting on it — a shop and the building containing it, say. Asking a
+  user to choose between two identical lines is a bug, not a choice.
+- **Queries under four characters are never sent.** Two characters match half
+  the planet, and the service is free and asks for fair use.
+- **A confirmed address is not second-guessed.** The "only matched
+  approximately" warning (§5.1) is suppressed once the user has read the
+  resolved address in full and chosen it. Warning about a decision the user just
+  made trains them to ignore the warning that matters.
+
+**Empty is not the same as unreachable.** An empty candidate list means "no such
+address"; a Photon outage raises, and is reported as an outage. Collapsing the
+two would tell a user behind a firewall that their address does not exist.
+
+**Panel invalidation extends to the candidate list.** A list belonging to a
+previous query is exactly as wrong as a result belonging to a previous address,
+so editing the address box drops both (§5.6).
+
+**CLI parity.** `--pick` shows the same numbered list and prompts for a choice;
+it is implied when no address is given on the command line, and `--no-pick`
+suppresses it so scripted runs stay non-interactive.
+
+---
+
 ## 6. Phased work
 
 Each phase leaves the repo working. No phase requires the next.
@@ -1077,6 +1151,8 @@ CORS headers — a static build would fall back to Nominatim first instead.
 - ~~Panel 3 in the web app?~~ → yes, fully specified in §5.7: local pressure
   with a unit dropdown, optional second temperature, and a Ctp difference as the
   only reported comparison.
+- ~~Address entry~~ → a confirm-before-lookup picker backed by Photon, with an
+  always-present escape to the full geocoder chain (§5.8).
 - ~~Ctp tolerance / action level~~ → not the tool's business; no threshold, no
   pass/fail flag (§5.7).
 
