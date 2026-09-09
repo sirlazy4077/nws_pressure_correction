@@ -15,7 +15,7 @@ import threading
 from .config import GEOCODER_CHAIN, USER_AGENT
 from .errors import GeocodingError
 from .models import Location
-from .net import HttpError, build_url, get_json
+from .net import HttpError, build_url, certificate_advice, get_json, ssl_context
 
 CENSUS_URL = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
 
@@ -48,8 +48,13 @@ def _rate_limited(name: str):
         from geopy.extra.rate_limiter import RateLimiter  # note: geopy.extra, not .geocoders
         from geopy.geocoders import Nominatim, Photon
 
+        # geopy uses its own HTTP stack, so it needs the same trust decision
+        # handed to it explicitly (see net.ssl_context). None means "geopy's
+        # default", which is what we want when truststore is not in play.
+        context = ssl_context()
+
         if name == "nominatim":
-            coder = Nominatim(user_agent=USER_AGENT, timeout=12)
+            coder = Nominatim(user_agent=USER_AGENT, timeout=12, ssl_context=context)
             call = RateLimiter(
                 functools.partial(coder.geocode, addressdetails=True),
                 min_delay_seconds=1.0,
@@ -57,7 +62,7 @@ def _rate_limited(name: str):
                 swallow_exceptions=False,
             )
         else:
-            coder = Photon(user_agent=USER_AGENT, timeout=12)
+            coder = Photon(user_agent=USER_AGENT, timeout=12, ssl_context=context)
             call = RateLimiter(coder.geocode, min_delay_seconds=1.0, max_retries=0,
                                swallow_exceptions=False)
         _geopy_cache[name] = call
@@ -67,12 +72,8 @@ def _rate_limited(name: str):
 def _transport_reason(exc: Exception) -> str:
     """Turn a geopy/urllib failure into one line a user can act on."""
     text = str(exc) or exc.__class__.__name__
-    if "CERTIFICATE_VERIFY_FAILED" in text:
-        return (
-            "TLS certificate rejected - this network intercepts HTTPS. Point "
-            "SSL_CERT_FILE at your proxy's CA bundle, or run from a network that "
-            "does not intercept."
-        )
+    if "CERTIFICATE_VERIFY_FAILED" in text or "SSLCertVerification" in text:
+        return certificate_advice()
     return f"could not be reached ({text.splitlines()[0][:120]})"
 
 
@@ -129,11 +130,15 @@ def geocode_nominatim(address: str) -> Location | None:
     if hit is None:
         return None
     raw = getattr(hit, "raw", {}) or {}
-    cc = _norm_cc((raw.get("address") or {}).get("country_code"))
-    kind = raw.get("addresstype") or raw.get("type") or ""
-    if kind in {"house", "building", "residential", "address"}:
+    parts = raw.get("address") or {}
+    cc = _norm_cc(parts.get("country_code"))
+    # Key off the house number, as the Photon branch does. Nominatim's
+    # `addresstype` is unreliable for this: a rooftop match on Rua Augusta 100
+    # comes back as addresstype "place", which would read as approximate and
+    # warn the user about a match that is in fact exact.
+    if parts.get("house_number"):
         confidence = "exact"
-    elif kind in {"road", "street", "highway"}:
+    elif parts.get("road"):
         confidence = "interpolated"
     else:
         confidence = "approximate"

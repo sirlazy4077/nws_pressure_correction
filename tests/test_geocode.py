@@ -144,3 +144,48 @@ def test_census_parses_a_match(monkeypatch):
 def test_census_returns_none_when_there_is_no_match(monkeypatch):
     monkeypatch.setattr(geo, "get_json", lambda url, **kw: {"result": {"addressMatches": []}})
     assert geo.geocode_census("nowhere at all") is None
+
+
+# --- Nominatim result parsing --------------------------------------------
+
+
+class _FakeHit:
+    def __init__(self, raw, address="somewhere"):
+        self.raw = raw
+        self.address = address
+        self.latitude = 38.7101
+        self.longitude = -9.1374
+
+
+def _nominatim(monkeypatch, raw):
+    monkeypatch.setattr(geo, "_rate_limited", lambda name: lambda addr, **kw: _FakeHit(raw))
+
+
+def test_a_rooftop_match_is_not_flagged_as_approximate(monkeypatch):
+    """Nominatim returns addresstype 'place' for a house-number hit on Rua
+    Augusta 100. Keying off addresstype would warn the user about a match that
+    is in fact exact."""
+    _nominatim(
+        monkeypatch,
+        {
+            "addresstype": "place",
+            "type": "house",
+            "address": {"house_number": "100", "road": "Rua Augusta", "country_code": "pt"},
+        },
+    )
+    location = geo.geocode_nominatim("Rua Augusta 100, Lisboa")
+    assert location.confidence == "exact"
+    assert location.country_code == "PT"
+
+
+def test_a_street_without_a_number_is_interpolated(monkeypatch):
+    _nominatim(
+        monkeypatch,
+        {"address": {"road": "Rua Augusta", "country_code": "pt"}},
+    )
+    assert geo.geocode_nominatim("Rua Augusta, Lisboa").confidence == "interpolated"
+
+
+def test_a_town_level_hit_is_approximate(monkeypatch):
+    _nominatim(monkeypatch, {"address": {"city": "Lisboa", "country_code": "pt"}})
+    assert geo.geocode_nominatim("Lisboa").confidence == "approximate"

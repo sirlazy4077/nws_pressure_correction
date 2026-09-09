@@ -1,5 +1,9 @@
 # Core library + CLI
 geopy>=2.4,<3
 
+# Verify TLS against the OS trust store, so the tool works on clinic networks
+# that intercept HTTPS. A no-op everywhere else.
+truststore>=0.9
+
 # Web front end (web/app.py). Streamlit Community Cloud installs from this file.
 streamlit>=1.30,<2
