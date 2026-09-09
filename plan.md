@@ -6,6 +6,7 @@ barometric formula, Ctp toggle defaulting to TG-51)
 **Revised:** 2026-09-08 (protocol auto-selection by country, calculation trace)
 **Revised:** 2026-09-09 (WU public key primary, Open-Meteo + NWS fallbacks, panel layout)
 **Revised:** 2026-09-09 (panel 3 intercomparison against a local instrument)
+**Revised:** 2026-09-09 (panel 3 reports Ctp difference only; input validation for bug #10)
 
 ## 1. Goal
 
@@ -26,7 +27,7 @@ user no extra input, but it is never silent: which protocol was used, and
 whether it was chosen automatically or by hand, is stated on every result.
 
 A third panel compares that result against the clinic's own barometer and
-thermometer, reporting the difference where it matters — in Ctp (§5.7).
+thermometer, and reports the one difference that matters — in Ctp (§5.7).
 
 And because a number a physicist cannot check is a number they should not trust,
 the tool **shows its whole chain of reasoning** (§5.5): the address as entered
@@ -70,7 +71,7 @@ else:** separate computation from I/O.
 | 7 | [requirements.txt](requirements.txt) | The file is **UTF-16 encoded** (that is why it displays as `b e a u t i f u l...`). `pip install -r` fails or misparses on most platforms. Must be rewritten as UTF-8. |
 | 8 | [.gitignore](.gitignore) | Contains `\venv` — a Windows backslash with no trailing newline. It matches nothing. Should be `venv/` and `.venv/`. |
 | 9 | [pressure_converter.py:296](pressure_converter.py#L296) | Local variable `ctp` shadows the enclosing function `ctp`. Harmless today, a trap the moment anyone adds recursion or a second call. |
-| 10 | [pressure_converter.py:323](pressure_converter.py#L323) | `intercomp_temps_percent` divides by `temp_round`. At a reference temperature of exactly 0 °C this is an uncaught `ZeroDivisionError`; near 0 °C it is unbounded. See §5.7 — the quantity itself is also unsound, not just its edge case. |
+| 10 | [pressure_converter.py:323](pressure_converter.py#L323) | `intercomp_temps_percent` divides by `temp_round` — an uncaught `ZeroDivisionError` at exactly 0 °C, unbounded near it. The quantity is also unsound in itself (a percentage of an interval scale). Two further division-by-zero paths reachable from user input, `P = 0` and `T = −273.2 °C`, are fixed at the same time. All three addressed by input validation in §5.7. |
 
 ### 2.3 Style / structure
 
@@ -790,12 +791,11 @@ be complete and correct on its own for someone who only wants the pressure.
 │  Your measured temp:      [ 21.8  ] °C   (optional)           │
 │                           blank = reuse panel 2's 21.5 °C     │
 │                                                               │
-│      Pressure   -3.11 mmHg   (-0.409%)                        │
-│      Temperature +0.30 °C    (+0.102% in K)                   │
-│      ---------------------------------------------            │
-│      Ctp        0.9982 -> 1.0033                              │
-│                 +0.0051      (+0.513%)                        │
-│                 both at TG-51, 22 °C - inherited from panel 2 │
+│      Ctp   calculated  0.9982                                 │
+│            yours       1.0033                                 │
+│            difference  +0.0051      (+0.513%)                 │
+│                                                               │
+│            both at TG-51, 22 °C - inherited from panel 2      │
 │                                                               │
 │  ▾ Show your work                                             │
 │      step 8 of the §5.5 trace                                 │
@@ -817,24 +817,25 @@ Consequences worth stating, because they constrain the implementation:
 
 ### 5.7 Panel 3 — intercomparison against a local instrument
 
-**What it answers:** *my barometer in the vault reads 757.0 — how far off is
-that from what this tool derived, and does the difference matter?*
+**What it answers:** *my barometer and thermometer in the vault read X and Y —
+how far is the Ctp they give me from the Ctp this tool derived?*
+
+**Panel 3 reports one thing: the difference between two Ctp values.** Not a
+pressure difference, not a temperature difference. Pressure and temperature are
+*inputs* to the second Ctp, and they are echoed back so the user can confirm what
+was entered, but they are not reported as differences. Ctp is what propagates
+into a dose measurement, so Ctp is what the comparison is about.
 
 ```python
 @dataclass(frozen=True)
 class IntercomparisonResult:
-    # what the user measured
+    # what the user measured — echoed for verification, not compared
     local_pressure_mmhg: float
     local_pressure_input: float      # as typed, before unit conversion
     local_pressure_unit: str         # "mmHg" | "inHg" | "hPa" | "kPa"
     local_temp_c: float
     local_temp_inherited: bool       # True if panel 2's temperature was reused
-    # deltas
-    d_pressure_mmhg: float
-    d_pressure_pct: float
-    d_temp_c: float
-    d_temp_pct_kelvin: float
-    # the one that reaches the dose
+    # the comparison
     ctp_calculated: float
     ctp_local: float
     d_ctp: float
@@ -851,72 +852,85 @@ class IntercomparisonResult:
    33% error that produces a plausible-looking number. Converting explicitly
    makes the unit part of the record.
 2. **Measured temperature — optional.** Left blank it reuses panel 2's value and
-   says so (`local_temp_inherited`), so the comparison is pressure-only. Filled
-   in, it drives a genuinely independent second Ctp from the clinic's own
-   instrument pair.
+   says so (`local_temp_inherited`). Filled in, the second Ctp comes entirely
+   from the clinic's own instrument pair.
 
 **The protocol is inherited from panel 2 and is not selectable here.** Both Ctp
 values must use the same reference or the comparison silently mixes an instrument
 difference with a 0.6775% convention difference (§2.4(d)) — the result would be
 uninterpretable. The panel states which protocol both sides used.
 
-**Outputs, ordered by what actually matters.** With the worked example:
+**Output.** With the worked example:
 
 ```
-Pressure     calculated 760.11 mmHg | yours 757.00 mmHg
-             -3.11 mmHg   (-0.409%)
+   Your readings : 757.00 mmHg (entered as 757.0 mmHg), 21.8 C
 
-Temperature  panel 2 21.5 C | yours 21.8 C
-             +0.30 C      (+0.102% in K)
+   Ctp
+       calculated  0.9982
+       yours       1.0033
+       difference  +0.0051      (+0.513%)
 
-Ctp          calculated 0.9982 | yours 1.0033
-             +0.0051      (+0.513%)      [both at TG-51, 22 C]
+   both at AAPM TG-51, 22 C reference
 ```
-
-**ΔCtp is the headline**, shown last and emphasised, because it is the only one
-of the three that propagates into a dose measurement. A 0.4% pressure difference
-and a 0.3 °C temperature difference are individually unremarkable; what the
-physicist needs is the 0.51% they combine to.
 
 **A domain fix carried over from the current code.** Today's `intercomparison()`
-reports a *percent difference in Celsius*
-([pressure_converter.py:323](pressure_converter.py#L323)). That quantity is
-unsound: Celsius is an interval scale with an arbitrary zero, so dividing by it
-produces a number that depends on where you happen to sit on the scale rather
-than on the physics. The same **+0.3 °C** difference reports as:
+([pressure_converter.py:322-332](pressure_converter.py#L322-L332)) reports four
+figures — absolute and percent differences in temperature and in pressure — and
+no Ctp comparison at all. One of those, the *percent difference in Celsius*, is
+not a sound quantity: Celsius is an interval scale with an arbitrary zero, so
+dividing by it gives a number that depends on where you sit on the scale rather
+than on the physics. The same **+0.3 °C** difference reports as +1.40% at 21.5 °C,
+**+30%** at 1 °C, **−15%** at −2 °C, and raises **ZeroDivisionError** at exactly
+0 °C (bug #10). Reporting Ctp instead retires all four figures and the unsound
+one with them.
 
-| Reference temp | % difference in °C | % difference in K |
-|---:|---:|---:|
-| 21.5 °C | +1.40% | +0.102% |
-| 1.0 °C | **+30.00%** | +0.109% |
-| 0.5 °C | **+60.00%** | +0.110% |
-| −2.0 °C | **−15.00%** | +0.111% |
-| 0.0 °C | **ZeroDivisionError** (bug #10) | +0.110% |
+**Addressing the division-by-zero properly (bug #10).** Deleting the Celsius
+percentage removes the specific crash, but not the class of bug — `ctp()` itself
+divides by pressure, and the percent difference divides by `ctp_calculated`.
+Both are reachable from user input:
 
-The Kelvin figure is stable across all of them because Kelvin has a true zero.
-**Panel 3 reports only the Kelvin percentage** alongside the absolute °C
-difference, and drops the Celsius percentage entirely. The absolute difference in
-°C is kept — that one is perfectly meaningful and is what a physicist actually
-reads off two thermometers.
+| Input | Consequence |
+|---|---|
+| `P = 0` | `760.0 / P` → `ZeroDivisionError` |
+| `T = −273.2 °C` | `(273.2 + T)` → 0, so `ctp` → 0, so the percent difference divides by zero |
 
-**Optional tolerance flag.** A single configurable threshold on |ΔCtp|, off by
-default, which colours the result and adds a pass/fail line when set — via
-`BAROME_CTP_TOLERANCE_PCT` or a field in the panel. **No default value is
-proposed**: an action level is a clinical decision, and inventing one would be
-worse than leaving it unset. Flagged in §8.
+So the fix belongs at the **input boundary**, not at each division. `physics.py`
+validates before computing and raises a domain error with a readable message
+instead of letting an arithmetic exception escape:
+
+```python
+ABSOLUTE_ZERO_C = -273.15
+PLAUSIBLE_PRESSURE_MMHG = (225.0, 825.0)   # ~9000 m up to a record sea-level high
+PLAUSIBLE_TEMP_C        = (-50.0, 60.0)
+
+def _validate(temp_c: float, pressure_mmhg: float) -> None:
+    if pressure_mmhg <= 0:
+        raise PhysicsInputError("Pressure must be greater than zero.")
+    if temp_c <= ABSOLUTE_ZERO_C:
+        raise PhysicsInputError(f"Temperature must be above absolute zero ({ABSOLUTE_ZERO_C} °C).")
+```
+
+Values outside the *plausible* ranges are not rejected — they are accepted with a
+warning, since the tool should not refuse to work somewhere unusual. Only the
+physically impossible is refused. Both bounds get tests, including the exact
+`P = 0` and `T = −273.2` cases above.
 
 **Trace step 8** shows both Ctp calculations side by side with their numbers
-substituted, the unit conversion applied to the entered pressure (showing the
-raw input and the converted value), and whether the temperature was entered or
+substituted, the unit conversion applied to the entered pressure (raw input and
+converted value both shown), and whether the temperature was entered or
 inherited.
 
-**Guard.** If the entered pressure differs from the calculated one by more than
-~10%, the panel asks *"did you mean hPa?"* rather than silently reporting a 300%
-discrepancy — that magnitude of difference is far more likely a unit mix-up than
-a real instrument fault.
+**Unit-mismatch guard.** If the entered pressure differs from the calculated one
+by more than ~10%, the panel asks *"did you mean hPa?"* rather than reporting a
+300% discrepancy — that magnitude is far more likely a unit mix-up than a real
+instrument fault. This is a prompt, not a rejection.
+
+**No tolerance or pass/fail flag.** Whether a given ΔCtp is acceptable is a
+clinical judgement, and the tool does not make it. Panel 3 reports the difference
+and stops.
 
 **CLI parity.** `--compare-pressure <value> --compare-unit <unit>
-[--compare-temp <C>]`, printing the same three-block output.
+[--compare-temp <C>]`, printing the same block.
 
 ---
 
@@ -992,8 +1006,10 @@ temperature inheriting panel 2's, and ΔCtp as the headline.
 
 Panel 3 tests: the unit conversions round-trip; a blank temperature inherits
 rather than defaulting to zero; the protocol is taken from panel 2 and cannot
-diverge; and the Celsius-percentage figure is gone (bug #10), with a 0 °C case
-asserting no division by zero.
+diverge; only a Ctp difference is reported; and the §5.7 input validation
+rejects `P = 0` and `T = −273.2 °C` with a readable domain error rather than a
+`ZeroDivisionError` (bug #10), while merely implausible values pass with a
+warning.
 
 The trace is the bulk of this phase's work and the reason the estimate moved from
 3 h to 4 h. Build it as a shared renderer taking `list[TraceStep]`, so the CLI's
@@ -1032,7 +1048,7 @@ CORS headers — a static build would fall back to Nominatim first instead.
 
 ---
 
-## 8. Decisions still open
+## 8. Decisions
 
 **Resolved in this revision:**
 
@@ -1054,21 +1070,22 @@ CORS headers — a static build would fall back to Nominatim first instead.
 - ~~Web app scope~~ → three panels, pressure standing alone in panel 1, Ctp and
   its protocol toggle in panel 2 (§5.6).
 - ~~Panel 3 in the web app?~~ → yes, fully specified in §5.7: local pressure
-  with a unit dropdown, optional second temperature, ΔCtp as the headline.
+  with a unit dropdown, optional second temperature, and a Ctp difference as the
+  only reported comparison.
+- ~~Ctp tolerance / action level~~ → not the tool's business; no threshold, no
+  pass/fail flag (§5.7).
 
 **Still open:**
 
-1. **Ctp tolerance / action level for panel 3.** The optional pass-fail flag in
-   §5.7 needs a threshold on |ΔCtp| to be useful, and that is a clinical
-   decision rather than a technical one. It ships off by default and the panel
-   works without it, so this blocks nothing — but if you have a house action
-   level, naming it makes panel 3 considerably more useful than a bare number.
+None. Every question this plan raised has been answered.
 
-Everything else is specified — the one remaining item does not block any phase.
+Tolerances and action levels are deliberately **out of scope** — panel 3 reports
+the Ctp difference and leaves the judgement to the clinical user (§5.7, §9).
 
 ## 9. Explicitly out of scope
 
-Accounts / auth, storing results, mobile apps, patient data of any kind, and any
-claim of medical-device or regulatory status. This stays a convenience calculator
+Accounts / auth, storing results, mobile apps, patient data of any kind,
+tolerances or action levels on the §5.7 comparison, and any claim of
+medical-device or regulatory status. This stays a convenience calculator
 whose sources are always shown so the user can verify them — which is the right
 instinct the current program already has.
