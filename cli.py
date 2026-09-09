@@ -66,6 +66,19 @@ def build_parser() -> argparse.ArgumentParser:
         "the legacy 1 inHg/1000 ft rule of thumb, kept only for reproducing old records.",
     )
     parser.add_argument(
+        "--pick",
+        action="store_true",
+        help=(
+            "Show matching addresses and choose one before looking up the pressure. "
+            "Implied when no address is given on the command line."
+        ),
+    )
+    parser.add_argument(
+        "--no-pick",
+        action="store_true",
+        help="Never offer the address picker, even when prompting. Keeps runs scriptable.",
+    )
+    parser.add_argument(
         "--trace",
         action="store_true",
         help="Print the full calculation chain, paste-ready for a QA log.",
@@ -100,17 +113,55 @@ def _ask_float(prompt: str) -> float | None:
         return None
 
 
+def _choose_address(address: str):
+    """Show candidates and let the user confirm one.
+
+    Returns a Location, or None to fall through to the full geocoder chain -
+    which is not a failure: OpenStreetMap does not know every address, and in
+    the US the Census geocoder often does.
+    """
+    try:
+        candidates = service.suggest_addresses(address)
+    except BaromeError as exc:
+        print(f"  ! Could not fetch suggestions ({exc}). Using your text as typed.")
+        return None
+    if not candidates:
+        print("  No suggestions matched. Looking it up directly.")
+        return None
+
+    print()
+    print("Did you mean:")
+    for index, candidate in enumerate(candidates, start=1):
+        print(f"  {index}. {candidate.display_name}")
+    print(f"  {len(candidates) + 1}. None of these - use exactly what I typed")
+
+    raw = _ask(f"Choose 1-{len(candidates) + 1} [1]: ") or "1"
+    try:
+        choice = int(raw)
+    except ValueError:
+        choice = 1
+    if 1 <= choice <= len(candidates):
+        return candidates[choice - 1]
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
+    interactive = args.address is None
     address = args.address or _ask("Your address: ")
     if not address:
         print("An address is required.")
         return 2
 
+    location = None
+    if (args.pick or interactive) and not args.no_pick:
+        location = _choose_address(address)
+
     try:
         result = service.pressure_for_address(
             address,
+            location=location,
             provider=args.provider,
             method=Method(args.method),
         )

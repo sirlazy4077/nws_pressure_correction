@@ -23,6 +23,7 @@ pip install -r requirements.txt
 
 # Command line
 python cli.py "123 Main St, Doylestown PA 18901"
+python cli.py --pick "123 Main St, Doyle"      # confirm the address from a list
 python cli.py "123 Main St, Doylestown PA 18901" --temp 21.5 --trace
 python cli.py "123 Main St, Doylestown PA 18901" --temp 21.5 \
               --compare-pressure 757 --compare-unit mmHg
@@ -35,7 +36,22 @@ Run `python cli.py --help` for the full set of options.
 
 ## What it does
 
-**Panel 1 — pressure.** Your address is geocoded (US Census → Nominatim →
+**Panel 1 — pressure.** You type what you know, press **Find address**, and pick
+the exact one from a list of real, resolved candidates — so the address the tool
+works from is one a geocoder actually knows, not one you hope it parsed
+correctly. Suggestions come from Photon/OpenStreetMap, which is built for
+search-as-you-type. (Nominatim cannot be used for this: its usage policy
+prohibits autocomplete outright.)
+
+OpenStreetMap does not know every address, so the list always ends with *"None
+of these — use exactly what I typed"*, which runs the full geocoder chain on
+your text. In the US that reaches the Census geocoder, which often has addresses
+OpenStreetMap does not.
+
+Picking a candidate costs no extra lookup: Photon returns the coordinates and
+the country with the suggestion, so a confirmed address is already resolved.
+
+Your address is then geocoded (US Census → Nominatim →
 Photon), the elevation at that point is looked up (USGS → Open-Meteo →
 OpenTopoData), and the nearest station's sea-level pressure is corrected to your
 elevation with the standard-atmosphere barometric formula:

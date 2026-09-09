@@ -17,6 +17,7 @@ from .errors import (
     PhysicsInputError,
     ProviderError,
 )
+from .geocode import suggest
 from .models import (
     CtpResult,
     IntercomparisonResult,
@@ -32,6 +33,7 @@ from .service import compare_local, ctp_for, pressure_for_address
 __all__ = [
     "__version__",
     "pressure_for_address",
+    "suggest",
     "ctp_for",
     "compare_local",
     "PressureResult",

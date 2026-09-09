@@ -24,6 +24,7 @@ from .errors import AllProvidersFailedError, ProviderError
 from .models import (
     CtpResult,
     IntercomparisonResult,
+    Location,
     Observation,
     PressureResult,
     TraceStep,
@@ -93,27 +94,54 @@ def _fetch_with_fallback(
     )
 
 
+# --- Address suggestions --------------------------------------------------
+
+
+def suggest_addresses(query: str, limit: int = geocode_mod.SUGGEST_LIMIT) -> list[Location]:
+    """Candidate addresses for a partial query, best first.
+
+    Front ends offer these so the user confirms a real, resolved address rather
+    than trusting that what they typed landed somewhere sensible. Each
+    candidate can be handed straight back to `pressure_for_address(location=)`.
+    """
+    return geocode_mod.suggest(query, limit)
+
+
 # --- Panel 1 --------------------------------------------------------------
 
 
 def pressure_for_address(
     address: str,
     *,
+    location: Location | None = None,
     provider: str = DEFAULT_PROVIDER,
     method: Method = Method.BAROMETRIC,
     geocoder_chain: tuple[str, ...] = GEOCODER_CHAIN,
     elevation_chain: tuple[str, ...] = ELEVATION_CHAIN,
 ) -> PressureResult:
-    """The user types one thing. This resolves everything else."""
+    """The user types one thing. This resolves everything else.
+
+    Pass `location` to use an address the user has already picked from
+    `geocode.suggest()`. A suggestion arrives fully resolved - Photon returns
+    the coordinates and country with the candidate - so confirming one costs no
+    second lookup, and a confirmed address cannot be the wrong place.
+    """
     trace: list[TraceStep] = []
     warnings: list[str] = []
     urls: dict[str, str] = {}
 
     # 1. ADDRESS ----------------------------------------------------------
-    location, geo_notes = geocode_mod.geocode(address, geocoder_chain)
+    confirmed = location is not None
+    if confirmed:
+        geo_notes = ["confirmed by the user from a list of suggestions"]
+    else:
+        location, geo_notes = geocode_mod.geocode(address, geocoder_chain)
     urls["geocode"] = location.url or ""
     geo_warnings: list[str] = []
-    if location.confidence == "approximate":
+    # A confirmed pick needs no such warning: the user has seen the resolved
+    # address in full and chosen it. Warning about it would train them to
+    # ignore the warning that matters.
+    if location.confidence == "approximate" and not confirmed:
         geo_warnings.append(
             f"The address only matched approximately, to '{location.display_name}'. "
             "Check that this is the right place before using the result."
@@ -122,7 +150,7 @@ def pressure_for_address(
     trace.append(
         TraceStep(
             stage="geocode",
-            provider=location.source,
+            provider=location.source + (", confirmed by you" if confirmed else ""),
             inputs={"address": address},
             output={
                 "resolved": location.display_name,

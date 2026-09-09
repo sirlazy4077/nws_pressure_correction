@@ -11,6 +11,7 @@ from __future__ import annotations
 import functools
 import logging
 import threading
+from functools import lru_cache
 
 from .config import GEOCODER_CHAIN, USER_AGENT
 from .errors import GeocodingError
@@ -18,6 +19,7 @@ from .models import Location
 from .net import HttpError, build_url, certificate_advice, get_json, ssl_context
 
 CENSUS_URL = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
+PHOTON_URL = "https://photon.komoot.io/api/"
 
 # Nominatim's policy is max 1 request/second. geopy's RateLimiter enforces the
 # delay per wrapped callable, so the wrappers are built once and reused.
@@ -83,6 +85,105 @@ def _norm_cc(value: str | None) -> str | None:
     if not value:
         return None
     return str(value).strip().upper() or None
+
+
+# --- Address suggestions --------------------------------------------------
+#
+# Photon is the only geocoder in the chain that may be used this way.
+# Nominatim's usage policy prohibits autocomplete and type-ahead outright, and
+# Census has no suggest endpoint - it answers a whole address or nothing.
+# Photon is built as a search-as-you-type geocoder, which is exactly this job.
+#
+# A suggestion is a fully resolved Location, not a string: Photon returns the
+# coordinates and country with the candidate. So confirming a suggestion costs
+# no second lookup, and the country that picks the Ctp protocol is already
+# known.
+
+SUGGEST_LIMIT = 5
+
+
+def _photon_label(props: dict) -> str:
+    """Build the line a human reads in the picker."""
+    street = " ".join(str(p) for p in (props.get("housenumber"), props.get("street")) if p)
+    head = street or props.get("name") or ""
+    tail = [
+        props.get("city") or props.get("district") or props.get("county"),
+        props.get("state"),
+        props.get("postcode"),
+        props.get("country"),
+    ]
+    parts = [head, *[str(t) for t in tail if t]]
+    # Photon repeats the city as the name for city-level hits.
+    seen: list[str] = []
+    for part in parts:
+        if part and (not seen or part != seen[-1]):
+            seen.append(part)
+    return ", ".join(seen)
+
+
+def _photon_feature_to_location(feature: dict) -> Location | None:
+    props = feature.get("properties") or {}
+    coords = (feature.get("geometry") or {}).get("coordinates") or []
+    if len(coords) < 2:
+        return None
+    label = _photon_label(props)
+    if not label:
+        return None
+    if props.get("housenumber"):
+        confidence = "exact"
+    elif props.get("street"):
+        confidence = "interpolated"
+    else:
+        confidence = "approximate"
+    return Location(
+        lat=float(coords[1]),
+        lon=float(coords[0]),
+        display_name=label,
+        source="photon",
+        confidence=confidence,
+        country_code=_norm_cc(props.get("countrycode")),
+        url=build_url(PHOTON_URL, {"q": label}),
+    )
+
+
+@lru_cache(maxsize=256)
+def _suggest_cached(query: str, limit: int) -> tuple[Location, ...]:
+    url = build_url(PHOTON_URL, {"q": query, "limit": limit * 3})
+    try:
+        data = get_json(url)
+    except HttpError as exc:
+        raise GeocodingError(str(exc)) from exc
+
+    out: list[Location] = []
+    seen: set[str] = set()
+    for feature in data.get("features") or []:
+        location = _photon_feature_to_location(feature)
+        if location is None:
+            continue
+        # Photon returns the same address more than once when several OSM
+        # objects sit on it - a shop and the building it is in, say. The user
+        # should not be asked to choose between two identical lines.
+        key = location.display_name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(location)
+        if len(out) >= limit:
+            break
+    return tuple(out)
+
+
+def suggest(query: str, limit: int = SUGGEST_LIMIT) -> list[Location]:
+    """Candidate addresses for a partial query, best first.
+
+    Returns [] for a query too short to be meaningful rather than sending it -
+    two characters match half the planet and waste a request on a free service.
+    Raises GeocodingError only if Photon could not be reached.
+    """
+    query = (query or "").strip()
+    if len(query) < 4:
+        return []
+    return list(_suggest_cached(query, limit))
 
 
 # --- Individual geocoders -------------------------------------------------
