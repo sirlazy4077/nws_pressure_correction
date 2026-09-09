@@ -109,7 +109,28 @@ matter which source answered.
 | `BAROME_CONTACT` | Contact address sent in the User-Agent (Nominatim's usage policy requires a genuine one). |
 | `BAROME_HTTP_TIMEOUT` | Seconds. Default 12. |
 | `BAROME_USGS_TIMEOUT` | Seconds. Default 25 — USGS EPQS is reliably correct and reliably slow. |
-| `SSL_CERT_FILE` | Point this at your proxy's CA bundle if your network intercepts HTTPS. |
+| `BAROME_SYSTEM_TRUST` | Set to `0` to verify TLS against Python's bundled CA list instead of the OS trust store. On by default. |
+| `SSL_CERT_FILE` | An alternative to the above: point it at your proxy's CA bundle. |
+
+## Networks that intercept HTTPS
+
+Many clinic networks terminate HTTPS at a proxy and re-sign it with a private
+CA. Managed workstations trust that CA — it is pushed in by group policy — which
+is why a browser reaches these APIs happily while Python does not: Python
+verifies against its own bundled CA list, which has never heard of the proxy.
+
+`truststore` is a required dependency for exactly this reason. It makes Python
+verify against the operating system's trust store, the same one the browser
+uses, so the tool works on an intercepting network with no configuration. It is
+a harmless no-op elsewhere, where the OS store and the bundled list agree.
+
+Verified on an intercepting network: without it, Open-Meteo, OpenTopoData,
+Nominatim and Photon all failed certificate verification while Census, Weather
+Underground, NWS and USGS worked — so US addresses resolved but international
+ones could not. With it, all eight reach.
+
+If a request still fails, the error says so in those terms rather than blaming
+your spelling, and points at the proxy rather than at the client.
 
 ## Deploying
 
