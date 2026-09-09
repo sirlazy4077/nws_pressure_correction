@@ -12,6 +12,7 @@ Run it with:  streamlit run web/app.py
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -29,6 +30,18 @@ st.set_page_config(
     page_icon="🌡️",
     layout="centered",
 )
+
+# Streamlit Community Cloud's secrets UI populates st.secrets; the library
+# reads os.environ, so that it stays usable from the CLI and from tests with no
+# Streamlit installed at all. Bridge the two here, at the front end, rather
+# than teaching config.py about Streamlit.
+for _key in ("WU_API_KEY", "BAROME_CTP_PROTOCOL", "BAROME_CONTACT"):
+    try:
+        if _key in st.secrets and _key not in os.environ:
+            os.environ[_key] = str(st.secrets[_key])
+    except Exception:
+        # No secrets file at all: normal when running locally.
+        break
 
 PROTOCOL_CHOICES = [CtpProtocol.TG_51, CtpProtocol.TRS_398]
 PROTOCOL_CAPTION = {

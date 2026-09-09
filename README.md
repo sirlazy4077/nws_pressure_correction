@@ -137,9 +137,31 @@ your spelling, and points at the proxy rather than at the client.
 **Streamlit Community Cloud** is the recommended host: it deploys straight from
 this repo on push, keeps one Python codebase for both front ends, and has a
 secrets UI for `WU_API_KEY`. A ~40 second cold start after idle is a non-issue
-for a clinic checking pressure a few times a day.
+for a clinic checking pressure a few times a day. It also sidesteps the
+intercepting-proxy problem entirely, because the API calls then originate from
+Streamlit's network rather than the clinic's.
 
-Point it at `web/app.py`; it installs from `requirements.txt`.
+1. Sign in at [share.streamlit.io](https://share.streamlit.io) with the GitHub
+   account that owns this repo, and authorise it.
+2. **Create app** → this repository → the branch you want to serve →
+   main file path **`web/app.py`**.
+3. Under **Advanced settings**, choose **Python 3.11 or newer**. The package
+   uses `StrEnum` and `datetime.UTC`, both 3.11+.
+4. Still under Advanced settings, add any secrets in TOML form. All are
+   optional — the app runs with none:
+
+   ```toml
+   WU_API_KEY = "your-own-key"
+   BAROME_CTP_PROTOCOL = "TG-51"
+   ```
+
+5. Deploy. It installs from `requirements.txt` at the repo root.
+
+Every later `git push` to that branch redeploys automatically.
+
+Apps are **public by default**. Nothing here handles patient data, but if you
+would rather it were not world-readable, set the app to private in its settings
+and add viewers by email — the free tier allows this.
 
 ## Layout
 
