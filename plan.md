@@ -4,7 +4,8 @@
 **Drafted:** 2026-09-08 · **Revised:** 2026-09-08 (geocoding, elevation,
 barometric formula, Ctp toggle defaulting to TG-51)
 **Revised:** 2026-09-08 (protocol auto-selection by country, calculation trace)
-**Revised:** 2026-09-09 (WU public key primary, Open-Meteo + NWS fallbacks, two-panel layout)
+**Revised:** 2026-09-09 (WU public key primary, Open-Meteo + NWS fallbacks, panel layout)
+**Revised:** 2026-09-09 (panel 3 intercomparison against a local instrument)
 
 ## 1. Goal
 
@@ -23,6 +24,9 @@ addresses get **AAPM TG-51 (22 °C)**, everywhere else gets **IAEA TRS-398
 (20 °C)** — and stays overridable by hand at any time (§5.4). So it costs the
 user no extra input, but it is never silent: which protocol was used, and
 whether it was chosen automatically or by hand, is stated on every result.
+
+A third panel compares that result against the clinic's own barometer and
+thermometer, reporting the difference where it matters — in Ctp (§5.7).
 
 And because a number a physicist cannot check is a number they should not trust,
 the tool **shows its whole chain of reasoning** (§5.5): the address as entered
@@ -66,6 +70,7 @@ else:** separate computation from I/O.
 | 7 | [requirements.txt](requirements.txt) | The file is **UTF-16 encoded** (that is why it displays as `b e a u t i f u l...`). `pip install -r` fails or misparses on most platforms. Must be rewritten as UTF-8. |
 | 8 | [.gitignore](.gitignore) | Contains `\venv` — a Windows backslash with no trailing newline. It matches nothing. Should be `venv/` and `.venv/`. |
 | 9 | [pressure_converter.py:296](pressure_converter.py#L296) | Local variable `ctp` shadows the enclosing function `ctp`. Harmless today, a trap the moment anyone adds recursion or a second call. |
+| 10 | [pressure_converter.py:323](pressure_converter.py#L323) | `intercomp_temps_percent` divides by `temp_round`. At a reference temperature of exactly 0 °C this is an uncaught `ZeroDivisionError`; near 0 °C it is unbounded. See §5.7 — the quantity itself is also unsound, not just its edge case. |
 
 ### 2.3 Style / structure
 
@@ -702,6 +707,7 @@ from the verified test point:
 
 --- steps 1-6 are panel 1: the pressure at your address. -------------------
 --- step 7 is panel 2, and only appears once you enter a temperature. ------
+--- step 8 is panel 3 (§5.7), only if you compare against your own meter. --
 
 7. Ctp
    Protocol    : AAPM TG-51, 22.0 C reference  [auto-selected: country = US]
@@ -780,7 +786,19 @@ be complete and correct on its own for someone who only wants the pressure.
 └───────────────────────────────────────────────────────────────┘
 
 ┌─ PANEL 3 ─ Intercomparison  (optional) ───────────────────────┐
-│  as today: absolute and percent differences                   │
+│  Your measured pressure:  [ 757.0 ]  [ mmHg ▾ ]               │
+│  Your measured temp:      [ 21.8  ] °C   (optional)           │
+│                           blank = reuse panel 2's 21.5 °C     │
+│                                                               │
+│      Pressure   -3.11 mmHg   (-0.409%)                        │
+│      Temperature +0.30 °C    (+0.102% in K)                   │
+│      ---------------------------------------------            │
+│      Ctp        0.9982 -> 1.0033                              │
+│                 +0.0051      (+0.513%)                        │
+│                 both at TG-51, 22 °C - inherited from panel 2 │
+│                                                               │
+│  ▾ Show your work                                             │
+│      step 8 of the §5.5 trace                                 │
 └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -796,6 +814,109 @@ Consequences worth stating, because they constrain the implementation:
 - **Each panel exports its own trace**, and the top-level "copy as text" emits
   whichever panels the user has actually filled in — a pressure-only lookup
   should not paste a Ctp section into the QA log.
+
+### 5.7 Panel 3 — intercomparison against a local instrument
+
+**What it answers:** *my barometer in the vault reads 757.0 — how far off is
+that from what this tool derived, and does the difference matter?*
+
+```python
+@dataclass(frozen=True)
+class IntercomparisonResult:
+    # what the user measured
+    local_pressure_mmhg: float
+    local_pressure_input: float      # as typed, before unit conversion
+    local_pressure_unit: str         # "mmHg" | "inHg" | "hPa" | "kPa"
+    local_temp_c: float
+    local_temp_inherited: bool       # True if panel 2's temperature was reused
+    # deltas
+    d_pressure_mmhg: float
+    d_pressure_pct: float
+    d_temp_c: float
+    d_temp_pct_kelvin: float
+    # the one that reaches the dose
+    ctp_calculated: float
+    ctp_local: float
+    d_ctp: float
+    d_ctp_pct: float
+    protocol: CtpProtocol            # inherited from panel 2, never chosen here
+    trace: list[TraceStep]
+```
+
+**Inputs.**
+
+1. **Measured pressure — required**, with a **unit dropdown**
+   (mmHg / inHg / hPa / kPa). The dropdown is not a convenience: a clinic
+   barometer reading 1013 hPa typed into a field expecting mmHg is a silent
+   33% error that produces a plausible-looking number. Converting explicitly
+   makes the unit part of the record.
+2. **Measured temperature — optional.** Left blank it reuses panel 2's value and
+   says so (`local_temp_inherited`), so the comparison is pressure-only. Filled
+   in, it drives a genuinely independent second Ctp from the clinic's own
+   instrument pair.
+
+**The protocol is inherited from panel 2 and is not selectable here.** Both Ctp
+values must use the same reference or the comparison silently mixes an instrument
+difference with a 0.6775% convention difference (§2.4(d)) — the result would be
+uninterpretable. The panel states which protocol both sides used.
+
+**Outputs, ordered by what actually matters.** With the worked example:
+
+```
+Pressure     calculated 760.11 mmHg | yours 757.00 mmHg
+             -3.11 mmHg   (-0.409%)
+
+Temperature  panel 2 21.5 C | yours 21.8 C
+             +0.30 C      (+0.102% in K)
+
+Ctp          calculated 0.9982 | yours 1.0033
+             +0.0051      (+0.513%)      [both at TG-51, 22 C]
+```
+
+**ΔCtp is the headline**, shown last and emphasised, because it is the only one
+of the three that propagates into a dose measurement. A 0.4% pressure difference
+and a 0.3 °C temperature difference are individually unremarkable; what the
+physicist needs is the 0.51% they combine to.
+
+**A domain fix carried over from the current code.** Today's `intercomparison()`
+reports a *percent difference in Celsius*
+([pressure_converter.py:323](pressure_converter.py#L323)). That quantity is
+unsound: Celsius is an interval scale with an arbitrary zero, so dividing by it
+produces a number that depends on where you happen to sit on the scale rather
+than on the physics. The same **+0.3 °C** difference reports as:
+
+| Reference temp | % difference in °C | % difference in K |
+|---:|---:|---:|
+| 21.5 °C | +1.40% | +0.102% |
+| 1.0 °C | **+30.00%** | +0.109% |
+| 0.5 °C | **+60.00%** | +0.110% |
+| −2.0 °C | **−15.00%** | +0.111% |
+| 0.0 °C | **ZeroDivisionError** (bug #10) | +0.110% |
+
+The Kelvin figure is stable across all of them because Kelvin has a true zero.
+**Panel 3 reports only the Kelvin percentage** alongside the absolute °C
+difference, and drops the Celsius percentage entirely. The absolute difference in
+°C is kept — that one is perfectly meaningful and is what a physicist actually
+reads off two thermometers.
+
+**Optional tolerance flag.** A single configurable threshold on |ΔCtp|, off by
+default, which colours the result and adds a pass/fail line when set — via
+`BAROME_CTP_TOLERANCE_PCT` or a field in the panel. **No default value is
+proposed**: an action level is a clinical decision, and inventing one would be
+worse than leaving it unset. Flagged in §8.
+
+**Trace step 8** shows both Ctp calculations side by side with their numbers
+substituted, the unit conversion applied to the entered pressure (showing the
+raw input and the converted value), and whether the temperature was entered or
+inherited.
+
+**Guard.** If the entered pressure differs from the calculated one by more than
+~10%, the panel asks *"did you mean hPa?"* rather than silently reporting a 300%
+discrepancy — that magnitude of difference is far more likely a unit mix-up than
+a real instrument fault.
+
+**CLI parity.** `--compare-pressure <value> --compare-unit <unit>
+[--compare-temp <C>]`, printing the same three-block output.
 
 ---
 
@@ -861,12 +982,18 @@ trace cannot drift out of sync with the calculation that produced it. Wire up
 as a thin caller — one address prompt, plus `--protocol` and `--trace`.
 Fixes bugs #1, #3, #4, #5.
 
-**Phase 5 — the web app** *(~4 h)*
+**Phase 5 — the web app** *(~5 h)*
 Build the three panels of §5.6. Panel 1 is address in, pressure out, with steps
 1-6 of the trace and no mention of any protocol. Panel 2 holds the temperature
 input, the TG-51/TRS-398 radio pre-selected from country, and step 7 — all
-recomputing from the cached `PressureResult` with no refetch. Panel 3 is
-intercomparison, preserving today's feature.
+recomputing from the cached `PressureResult` with no refetch. Panel 3 is the
+§5.7 intercomparison: measured pressure with a unit dropdown, optional
+temperature inheriting panel 2's, and ΔCtp as the headline.
+
+Panel 3 tests: the unit conversions round-trip; a blank temperature inherits
+rather than defaulting to zero; the protocol is taken from panel 2 and cannot
+diverge; and the Celsius-percentage figure is gone (bug #10), with a 0 °C case
+asserting no division by zero.
 
 The trace is the bulk of this phase's work and the reason the estimate moved from
 3 h to 4 h. Build it as a shared renderer taking `list[TraceStep]`, so the CLI's
@@ -926,12 +1053,16 @@ CORS headers — a static build would fall back to Nominatim first instead.
   Open-Meteo as the worldwide fallback 1 (§3.1.1).
 - ~~Web app scope~~ → three panels, pressure standing alone in panel 1, Ctp and
   its protocol toggle in panel 2 (§5.6).
+- ~~Panel 3 in the web app?~~ → yes, fully specified in §5.7: local pressure
+  with a unit dropdown, optional second temperature, ΔCtp as the headline.
 
 **Still open:**
 
-1. **Whether panel 3 (intercomparison) is still wanted** in the web app, or is
-   a CLI-only tool in practice. It is preserved either way; this only decides
-   whether it gets UI work in Phase 5.
+1. **Ctp tolerance / action level for panel 3.** The optional pass-fail flag in
+   §5.7 needs a threshold on |ΔCtp| to be useful, and that is a clinical
+   decision rather than a technical one. It ships off by default and the panel
+   works without it, so this blocks nothing — but if you have a house action
+   level, naming it makes panel 3 considerably more useful than a bare number.
 
 Everything else is specified — the one remaining item does not block any phase.
 
