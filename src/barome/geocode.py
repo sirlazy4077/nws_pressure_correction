@@ -1,0 +1,228 @@
+"""Address -> Location, over a chain of free keyless geocoders.
+
+US Census first: for US addresses it gives a true street match with no rate
+limit and no usage policy to honour. Nominatim and Photon then provide
+worldwide coverage. The first one to return a hit wins, and `Location.source`
+records which, so the user can see it.
+"""
+
+from __future__ import annotations
+
+import functools
+import logging
+import threading
+
+from .config import GEOCODER_CHAIN, USER_AGENT
+from .errors import GeocodingError
+from .models import Location
+from .net import HttpError, build_url, get_json
+
+CENSUS_URL = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
+
+# Nominatim's policy is max 1 request/second. geopy's RateLimiter enforces the
+# delay per wrapped callable, so the wrappers are built once and reused.
+_geopy_lock = threading.Lock()
+_geopy_cache: dict[str, object] = {}
+
+
+def _require_geopy():
+    try:
+        import geopy.geocoders  # noqa: F401
+    except ImportError as exc:  # pragma: no cover - environment-dependent
+        raise GeocodingError(
+            "geopy is not installed, so only the US Census geocoder is available. "
+            "Install it with: pip install geopy"
+        ) from exc
+
+
+def _rate_limited(name: str):
+    """Build (once) a rate-limited geocode callable for 'nominatim'/'photon'."""
+    with _geopy_lock:
+        if name in _geopy_cache:
+            return _geopy_cache[name]
+        _require_geopy()
+        # geopy's RateLimiter dumps a full traceback to the log before each
+        # retry. The chain below is already the retry mechanism - a different
+        # provider - so keep the console clean and let it fall through.
+        logging.getLogger("geopy").setLevel(logging.ERROR)
+        from geopy.extra.rate_limiter import RateLimiter  # note: geopy.extra, not .geocoders
+        from geopy.geocoders import Nominatim, Photon
+
+        if name == "nominatim":
+            coder = Nominatim(user_agent=USER_AGENT, timeout=12)
+            call = RateLimiter(
+                functools.partial(coder.geocode, addressdetails=True),
+                min_delay_seconds=1.0,
+                max_retries=0,
+                swallow_exceptions=False,
+            )
+        else:
+            coder = Photon(user_agent=USER_AGENT, timeout=12)
+            call = RateLimiter(coder.geocode, min_delay_seconds=1.0, max_retries=0,
+                               swallow_exceptions=False)
+        _geopy_cache[name] = call
+        return call
+
+
+def _transport_reason(exc: Exception) -> str:
+    """Turn a geopy/urllib failure into one line a user can act on."""
+    text = str(exc) or exc.__class__.__name__
+    if "CERTIFICATE_VERIFY_FAILED" in text:
+        return (
+            "TLS certificate rejected - this network intercepts HTTPS. Point "
+            "SSL_CERT_FILE at your proxy's CA bundle, or run from a network that "
+            "does not intercept."
+        )
+    return f"could not be reached ({text.splitlines()[0][:120]})"
+
+
+def _norm_cc(value: str | None) -> str | None:
+    """Nominatim returns 'us', Photon returns 'US'. Normalise, or every
+    Nominatim-resolved US address silently gets the wrong Ctp protocol."""
+    if not value:
+        return None
+    return str(value).strip().upper() or None
+
+
+# --- Individual geocoders -------------------------------------------------
+
+
+def geocode_census(address: str) -> Location | None:
+    """US only. A plain JSON GET - geopy does not ship a Census geocoder."""
+    url = build_url(
+        CENSUS_URL,
+        {"address": address, "benchmark": "2020", "format": "json"},
+    )
+    try:
+        data = get_json(url)
+    except HttpError as exc:
+        # Not the same thing as "no such address", and a clinic behind a
+        # firewall needs to be told which one it is hitting.
+        raise GeocodingError(str(exc)) from exc
+    matches = (data.get("result") or {}).get("addressMatches") or []
+    if not matches:
+        return None
+    top = matches[0]
+    coords = top.get("coordinates") or {}
+    lat, lon = coords.get("y"), coords.get("x")
+    if lat is None or lon is None:
+        return None
+    return Location(
+        lat=float(lat),
+        lon=float(lon),
+        display_name=top.get("matchedAddress") or address,
+        source="census",
+        confidence="exact",
+        country_code="US",  # US-only by construction
+        url=url,
+    )
+
+
+def geocode_nominatim(address: str) -> Location | None:
+    """Worldwide, via geopy."""
+    try:
+        hit = _rate_limited("nominatim")(address)
+    except GeocodingError:
+        raise
+    except Exception as exc:
+        raise GeocodingError(_transport_reason(exc)) from exc
+    if hit is None:
+        return None
+    raw = getattr(hit, "raw", {}) or {}
+    cc = _norm_cc((raw.get("address") or {}).get("country_code"))
+    kind = raw.get("addresstype") or raw.get("type") or ""
+    if kind in {"house", "building", "residential", "address"}:
+        confidence = "exact"
+    elif kind in {"road", "street", "highway"}:
+        confidence = "interpolated"
+    else:
+        confidence = "approximate"
+    return Location(
+        lat=float(hit.latitude),
+        lon=float(hit.longitude),
+        display_name=str(hit.address),
+        source="nominatim",
+        confidence=confidence,
+        country_code=cc,
+        url="https://nominatim.openstreetmap.org/search?format=json&q="
+        + address.replace(" ", "+"),
+    )
+
+
+def geocode_photon(address: str) -> Location | None:
+    """Worldwide, via geopy. Returns structured fields including countrycode."""
+    try:
+        hit = _rate_limited("photon")(address)
+    except GeocodingError:
+        raise
+    except Exception as exc:
+        raise GeocodingError(_transport_reason(exc)) from exc
+    if hit is None:
+        return None
+    props = (getattr(hit, "raw", {}) or {}).get("properties") or {}
+    cc = _norm_cc(props.get("countrycode"))
+    confidence = "exact" if props.get("housenumber") else "approximate"
+    return Location(
+        lat=float(hit.latitude),
+        lon=float(hit.longitude),
+        display_name=str(hit.address),
+        source="photon",
+        confidence=confidence,
+        country_code=cc,
+        url="https://photon.komoot.io/api/?q=" + address.replace(" ", "+"),
+    )
+
+
+_GEOCODERS = {
+    "census": geocode_census,
+    "nominatim": geocode_nominatim,
+    "photon": geocode_photon,
+}
+
+
+# --- The chain ------------------------------------------------------------
+
+
+def geocode(
+    address: str,
+    chain: tuple[str, ...] = GEOCODER_CHAIN,
+) -> tuple[Location, list[str]]:
+    """First geocoder in the chain that returns a hit, wins.
+
+    Returns (location, notes) where notes records what was tried and skipped,
+    for the calculation trace. Raises GeocodingError only if every provider
+    fails or returns nothing.
+    """
+    address = (address or "").strip()
+    if not address:
+        raise GeocodingError("Please enter an address.")
+
+    notes: list[str] = []
+    no_match: list[str] = []
+    unavailable: list[str] = []
+    for name in chain:
+        func = _GEOCODERS.get(name)
+        if func is None:
+            continue
+        try:
+            hit = func(address)
+        except GeocodingError as exc:
+            unavailable.append(f"{name} ({exc})")
+            notes.append(f"{name} unavailable - {exc}")
+            continue
+        if hit is not None:
+            return hit, notes
+        no_match.append(name)
+        notes.append(f"{name} returned no match - fell through")
+
+    # A firewall and a typo are different problems, and the advice differs.
+    if unavailable and not no_match:
+        raise GeocodingError(
+            "No geocoder could be reached: " + "; ".join(dict.fromkeys(unavailable))
+        )
+    message = f"Could not find that address. No match from: {', '.join(no_match)}."
+    if unavailable:
+        message += " Also could not reach: " + "; ".join(dict.fromkeys(unavailable)) + "."
+    raise GeocodingError(
+        message + " Check the spelling, or add the city, state/country and postal code."
+    )

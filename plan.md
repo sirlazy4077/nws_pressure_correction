@@ -1,6 +1,9 @@
 # Refactor Plan — BaroMe / nws_pressure_correction
 
-**Status:** proposal only, nothing implemented.
+**Status:** IMPLEMENTED 2026-09-09. All seven phases are built, tested and
+linted; see the README for usage and the release note on the changed Ctp
+default. This document is kept as the design record and the rationale behind
+each decision.
 **Drafted:** 2026-09-08 · **Revised:** 2026-09-08 (geocoding, elevation,
 barometric formula, Ctp toggle defaulting to TG-51)
 **Revised:** 2026-09-08 (protocol auto-selection by country, calculation trace)
@@ -753,7 +756,7 @@ tool should hand them something paste-ready rather than making them retype it.
 footer — a station 14 miles away or a 3-hour-old observation is flagged in
 step 3 where the user is already looking.
 
-### 5.6 Web app layout — two panels
+### 5.6 Web app layout — three panels
 
 The split is by *what the user is asking for*, and the rule is that panel 1 must
 be complete and correct on its own for someone who only wants the pressure.
@@ -928,6 +931,8 @@ instrument fault. This is a prompt, not a rejection.
 **No tolerance or pass/fail flag.** Whether a given ΔCtp is acceptable is a
 clinical judgement, and the tool does not make it. Panel 3 reports the difference
 and stops.
+
+**Calculation across panels must update when address is changed.** This is to ensure the user does not have stale or incorrect data.
 
 **CLI parity.** `--compare-pressure <value> --compare-unit <unit>
 [--compare-temp <C>]`, printing the same block.
