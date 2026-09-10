@@ -26,7 +26,7 @@ import urllib.request
 from functools import lru_cache
 from typing import Any
 
-from .config import HTTP_TIMEOUT_S, USER_AGENT
+from .config import HTTP_TIMEOUT_S, user_agent
 
 TRUST_ENV = "BAROME_SYSTEM_TRUST"
 _FALSEY = {"0", "false", "no", "off"}
@@ -95,7 +95,9 @@ def get_json(
     exception type to catch. The old code caught only IndexError, which is why
     the three most likely real-world failures were the three that killed it.
     """
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **(headers or {})})
+    # user_agent() raises ContactRequiredError, which is deliberately not an
+    # HttpError: no fallback chain should swallow it and try the next source.
+    request = urllib.request.Request(url, headers={"User-Agent": user_agent(), **(headers or {})})
     try:
         with urllib.request.urlopen(request, timeout=timeout, context=ssl_context()) as response:
             raw = response.read()

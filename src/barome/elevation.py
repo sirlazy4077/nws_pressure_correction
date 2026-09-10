@@ -9,9 +9,13 @@ not, which is why the chain simply takes the first that responds.
 
 from __future__ import annotations
 
+import json
+import os
+import threading
+from datetime import UTC, datetime
 from functools import lru_cache
 
-from .config import ELEVATION_CHAIN, USGS_TIMEOUT_S
+from .config import ELEVATION_CHAIN, USGS_TIMEOUT_S, elevation_cache_path
 from .errors import ElevationError
 from .net import HttpError, build_url, get_json
 from .physics import FT_PER_M
@@ -84,8 +88,88 @@ def _opentopodata(lat: float, lon: float) -> tuple[float, str, str] | None:
 _SOURCES = {"usgs": _usgs, "openmeteo": _openmeteo, "opentopodata": _opentopodata}
 
 
+# --- Disk cache -------------------------------------------------------------
+#
+# The in-memory cache below lasts one process. This one lasts between runs, so
+# a script started every hour does not wait on USGS every hour. It stores the
+# original source and URL with the value, so the trace still says where the
+# number came from.
+
+_DISK_VERSION = 1
+_disk_lock = threading.Lock()
+
+
+def _is_preferred(source_key: str, chain: tuple[str, ...]) -> bool:
+    """Did this answer come from the first source in the chain?
+
+    Only those are persisted or reused. A fallback answer is fine for today's
+    run, but storing it would lock in the coarser dataset forever just because
+    USGS was slow once.
+    """
+    return bool(chain) and source_key.split("-")[0] == chain[0]
+
+
+def _disk_key(lat_r: float, lon_r: float) -> str:
+    return f"{lat_r:.4f},{lon_r:.4f}"
+
+
+def _read_disk(path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}  # missing or corrupt: a slower run, never an error
+    if not isinstance(data, dict) or data.get("version") != _DISK_VERSION:
+        return {}
+    entries = data.get("entries")
+    return entries if isinstance(entries, dict) else {}
+
+
+def _disk_lookup(lat_r: float, lon_r: float, chain: tuple[str, ...]):
+    path = elevation_cache_path()
+    if path is None:
+        return None
+    entry = _read_disk(path).get(_disk_key(lat_r, lon_r))
+    if not isinstance(entry, dict):
+        return None
+    try:
+        hit = (float(entry["feet"]), str(entry["source"]), str(entry["url"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return hit if _is_preferred(hit[1], chain) else None
+
+
+def _disk_store(lat_r: float, lon_r: float, hit: tuple[float, str, str]) -> None:
+    path = elevation_cache_path()
+    if path is None:
+        return
+    feet, source, url = hit
+    with _disk_lock:
+        entries = _read_disk(path)
+        entries[_disk_key(lat_r, lon_r)] = {
+            "feet": feet,
+            "source": source,
+            "url": url,
+            "fetched_utc": datetime.now(UTC).isoformat(timespec="seconds"),
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # Write-then-rename, so a second script reading at the same moment
+            # never sees half a file.
+            tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+            tmp.write_text(
+                json.dumps({"version": _DISK_VERSION, "entries": entries}, indent=1),
+                encoding="utf-8",
+            )
+            os.replace(tmp, path)
+        except OSError:
+            pass  # an unwritable cache costs the next run a lookup, nothing more
+
+
 @lru_cache(maxsize=256)
 def _cached(lat_r: float, lon_r: float, chain: tuple[str, ...]):
+    stored = _disk_lookup(lat_r, lon_r, chain)
+    if stored is not None:
+        return stored
     problems: list[str] = []
     for name in chain:
         func = _SOURCES.get(name)
@@ -93,6 +177,8 @@ def _cached(lat_r: float, lon_r: float, chain: tuple[str, ...]):
             continue
         hit = func(lat_r, lon_r)
         if hit is not None:
+            if _is_preferred(hit[1], chain):
+                _disk_store(lat_r, lon_r, hit)
             return hit
         problems.append(name)
     raise ElevationError(
@@ -109,8 +195,8 @@ def elevation_ft(
     """Returns (feet, source_key, url).
 
     Cached on coordinates rounded to 4 dp (~11 m): a clinic re-checks the same
-    address all day and its elevation does not change. This also keeps
-    Nominatim's rate policy comfortably satisfied upstream.
+    address all day and its elevation does not change. Cached in memory for
+    this process, and on disk between runs unless BAROME_ELEVATION_CACHE is off.
     """
     return _cached(round(float(lat), 4), round(float(lon), 4), tuple(chain))
 

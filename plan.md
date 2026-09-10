@@ -329,7 +329,7 @@ which one answered so the user can see it.
 
 **Nominatim usage policy** (must be respected or the clinic's IP gets blocked):
 max 1 request/second, a genuine identifying `User-Agent` (this project will send
-`barome/<version> (kprisolo@gmail.com)`), and no bulk querying. All three are
+`barome/<version> (<contact email>)`), and no bulk querying. All three are
 satisfied by a clinic looking up an address a few times a day, and the caching in
 §5.2 makes repeat lookups free.
 

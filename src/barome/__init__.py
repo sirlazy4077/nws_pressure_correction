@@ -3,15 +3,18 @@
 The user types one thing, their address. Latitude/longitude, the weather
 station, and the elevation *at that address* are all resolved for them.
 
-    from barome import pressure_for_address, ctp_for
+    from barome import pressure_for_address, set_contact
+    set_contact("you@example.org")      # or set BAROME_CONTACT
     result = pressure_for_address("123 Main St, Doylestown PA 18901")
     print(result.pressure_station_mmhg)
 """
 
 from .config import VERSION as __version__
+from .config import set_contact
 from .errors import (
     AllProvidersFailedError,
     BaromeError,
+    ContactRequiredError,
     ElevationError,
     GeocodingError,
     PhysicsInputError,
@@ -32,6 +35,7 @@ from .service import compare_local, ctp_for, pressure_for_address
 
 __all__ = [
     "__version__",
+    "set_contact",
     "pressure_for_address",
     "suggest",
     "ctp_for",
@@ -46,6 +50,7 @@ __all__ = [
     "CtpProtocol",
     "Method",
     "BaromeError",
+    "ContactRequiredError",
     "GeocodingError",
     "ElevationError",
     "ProviderError",

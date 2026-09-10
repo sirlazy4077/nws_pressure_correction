@@ -21,7 +21,8 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from barome import service  # noqa: E402
-from barome.errors import BaromeError  # noqa: E402
+from barome.config import contact_email  # noqa: E402
+from barome.errors import BaromeError, ContactRequiredError  # noqa: E402
 from barome.physics import PRESSURE_UNITS, REFERENCE_TEMP_C, CtpProtocol  # noqa: E402
 from barome.render import render_full_trace, render_steps  # noqa: E402
 
@@ -42,6 +43,26 @@ for _key in ("WU_API_KEY", "BAROME_CTP_PROTOCOL", "BAROME_CONTACT"):
     except Exception:
         # No secrets file at all: normal when running locally.
         break
+
+# The on-disk elevation cache is for scripts run again and again. A server's
+# disk is ephemeral and shared by every session, and the in-memory cache
+# already covers a long-running process.
+os.environ.setdefault("BAROME_ELEVATION_CACHE", "off")
+
+# Visitors are not the ones making the requests - the deployment is - so they
+# are never asked for a contact. The operator supplies one as the
+# BAROME_CONTACT secret. It is deliberately never written in this file: the
+# repository is public, and it is sent only in the User-Agent to the services
+# queried, never shown on the page.
+try:
+    contact_email()
+except ContactRequiredError:
+    st.error(
+        "This deployment is not configured yet: its operator needs to add a "
+        "`BAROME_CONTACT` secret (a contact email for the geocoding services' "
+        "usage policy). Running it yourself? Put it in `.streamlit/secrets.toml`."
+    )
+    st.stop()
 
 PROTOCOL_CHOICES = [CtpProtocol.TG_51, CtpProtocol.TRS_398]
 PROTOCOL_CAPTION = {
