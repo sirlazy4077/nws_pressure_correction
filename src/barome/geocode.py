@@ -13,8 +13,8 @@ import logging
 import threading
 from functools import lru_cache
 
-from .config import GEOCODER_CHAIN, USER_AGENT
-from .errors import GeocodingError
+from .config import GEOCODER_CHAIN, user_agent
+from .errors import BaromeError, GeocodingError
 from .models import Location
 from .net import HttpError, build_url, certificate_advice, get_json, ssl_context
 
@@ -24,7 +24,7 @@ PHOTON_URL = "https://photon.komoot.io/api/"
 # Nominatim's policy is max 1 request/second. geopy's RateLimiter enforces the
 # delay per wrapped callable, so the wrappers are built once and reused.
 _geopy_lock = threading.Lock()
-_geopy_cache: dict[str, object] = {}
+_geopy_cache: dict[tuple[str, str], object] = {}
 
 
 def _require_geopy():
@@ -39,9 +39,13 @@ def _require_geopy():
 
 def _rate_limited(name: str):
     """Build (once) a rate-limited geocode callable for 'nominatim'/'photon'."""
+    # The User-Agent is baked into the geopy coder, so key on it: a script that
+    # calls set_contact() later must not keep sending the old contact.
+    agent = user_agent()
+    key = (name, agent)
     with _geopy_lock:
-        if name in _geopy_cache:
-            return _geopy_cache[name]
+        if key in _geopy_cache:
+            return _geopy_cache[key]
         _require_geopy()
         # geopy's RateLimiter dumps a full traceback to the log before each
         # retry. The chain below is already the retry mechanism - a different
@@ -56,7 +60,7 @@ def _rate_limited(name: str):
         context = ssl_context()
 
         if name == "nominatim":
-            coder = Nominatim(user_agent=USER_AGENT, timeout=12, ssl_context=context)
+            coder = Nominatim(user_agent=agent, timeout=12, ssl_context=context)
             call = RateLimiter(
                 functools.partial(coder.geocode, addressdetails=True),
                 min_delay_seconds=1.0,
@@ -64,10 +68,10 @@ def _rate_limited(name: str):
                 swallow_exceptions=False,
             )
         else:
-            coder = Photon(user_agent=USER_AGENT, timeout=12, ssl_context=context)
+            coder = Photon(user_agent=agent, timeout=12, ssl_context=context)
             call = RateLimiter(coder.geocode, min_delay_seconds=1.0, max_retries=0,
                                swallow_exceptions=False)
-        _geopy_cache[name] = call
+        _geopy_cache[key] = call
         return call
 
 
@@ -224,7 +228,9 @@ def geocode_nominatim(address: str) -> Location | None:
     """Worldwide, via geopy."""
     try:
         hit = _rate_limited("nominatim")(address)
-    except GeocodingError:
+    except BaromeError:
+        # Ours already, and a missing contact must not be reported as
+        # "Nominatim unreachable" and fall through.
         raise
     except Exception as exc:
         raise GeocodingError(_transport_reason(exc)) from exc
@@ -259,7 +265,7 @@ def geocode_photon(address: str) -> Location | None:
     """Worldwide, via geopy. Returns structured fields including countrycode."""
     try:
         hit = _rate_limited("photon")(address)
-    except GeocodingError:
+    except BaromeError:
         raise
     except Exception as exc:
         raise GeocodingError(_transport_reason(exc)) from exc

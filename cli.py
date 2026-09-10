@@ -18,8 +18,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from barome import service  # noqa: E402
-from barome.errors import BaromeError  # noqa: E402
+from barome import config, service  # noqa: E402
+from barome.errors import BaromeError, ContactRequiredError  # noqa: E402
 from barome.physics import PRESSURE_UNITS, Method  # noqa: E402
 from barome.render import (  # noqa: E402
     render_comparison,
@@ -38,6 +38,14 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("address", nargs="?", help="Your address. Prompted for if omitted.")
+    parser.add_argument(
+        "--contact",
+        metavar="EMAIL",
+        help=(
+            "Your contact email, sent to the geocoding services as their usage policy "
+            "requires. Required: set BAROME_CONTACT to avoid passing it every time."
+        ),
+    )
     parser.add_argument(
         "--temp",
         type=float,
@@ -113,6 +121,45 @@ def _ask_float(prompt: str) -> float | None:
         return None
 
 
+def _ensure_contact(flag: str | None) -> bool:
+    """A local run must say who is making the requests. Asks for it when there
+    is someone to ask; otherwise fails before anything is sent."""
+    missing = None
+    try:
+        if flag:
+            config.set_contact(flag)
+        else:
+            config.contact_email()
+        return True
+    except ContactRequiredError as exc:
+        missing = exc
+    if flag or not sys.stdin.isatty():
+        print(f"Error: {missing}", file=sys.stderr)
+        return False
+    print(
+        f"A contact email is required - the geocoding services' usage policy asks "
+        f"every caller to identify themselves. Set {config.CONTACT_ENV} to skip this."
+    )
+    try:
+        typed = input("Your email: ").strip()
+    except EOFError:
+        # Windows reports NUL as a terminal, so an unattended run with stdin
+        # redirected lands here. Say what is missing, not "Cancelled".
+        typed = ""
+    except KeyboardInterrupt:
+        print("\nCancelled.")
+        raise SystemExit(130) from None
+    if not typed:
+        print(f"Error: {missing}", file=sys.stderr)
+        return False
+    try:
+        config.set_contact(typed)
+    except ContactRequiredError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return False
+    return True
+
+
 def _choose_address(address: str):
     """Show candidates and let the user confirm one.
 
@@ -147,6 +194,9 @@ def _choose_address(address: str):
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    if not _ensure_contact(args.contact):
+        return 2
 
     interactive = args.address is None
     address = args.address or _ask("Your address: ")

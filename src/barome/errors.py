@@ -18,6 +18,14 @@ class PhysicsInputError(BaromeError, ValueError):
     """
 
 
+class ContactRequiredError(BaromeError):
+    """No usable contact email, so no request may be sent.
+
+    Raised before any network call rather than letting a geocoder fail on it
+    and be reported as "unreachable" - the fix is the user's, not the network's.
+    """
+
+
 class GeocodingError(BaromeError):
     """Every geocoder in the chain failed or returned nothing."""
 

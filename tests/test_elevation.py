@@ -1,7 +1,10 @@
 """The elevation chain, including the sentinel that makes it work abroad."""
 
+import json
+
 import pytest
 
+from barome import config
 from barome import elevation as elev
 from barome.errors import ElevationError
 
@@ -80,6 +83,67 @@ def test_repeat_lookups_are_cached(monkeypatch):
     elev.elevation_ft(40.30701, -75.14802, ("usgs",))
     elev.elevation_ft(40.30702, -75.14801, ("usgs",))  # same to 4 dp
     assert len(calls) == 1
+
+
+# --- Disk cache -------------------------------------------------------------
+
+
+def _new_run():
+    """What a fresh script run sees: an empty in-memory cache."""
+    elev._cached.cache_clear()
+
+
+def test_elevation_survives_into_the_next_run(monkeypatch):
+    monkeypatch.setattr(elev, "_SOURCES", {"usgs": lambda lat, lon: (325.33, "usgs", "u")})
+    elev.elevation_ft(40.307, -75.148, ("usgs",))
+    _new_run()
+    monkeypatch.setattr(elev, "_SOURCES", {"usgs": lambda *a: pytest.fail("refetched")})
+    assert elev.elevation_ft(40.307, -75.148, ("usgs",)) == (325.33, "usgs", "u")
+
+
+def test_a_fallback_answer_is_not_persisted(monkeypatch):
+    """USGS being slow once must not lock in the coarser dataset forever."""
+    monkeypatch.setattr(
+        elev,
+        "_SOURCES",
+        {"usgs": lambda *a: None, "openmeteo": lambda *a: (324.8, "openmeteo", "o")},
+    )
+    assert elev.elevation_ft(40.307, -75.148, ("usgs", "openmeteo"))[1] == "openmeteo"
+    _new_run()
+    monkeypatch.setattr(elev, "_SOURCES", {"usgs": lambda *a: (325.33, "usgs", "u")})
+    assert elev.elevation_ft(40.307, -75.148, ("usgs", "openmeteo"))[1] == "usgs"
+
+
+def test_a_cached_value_from_another_chains_source_is_not_reused(monkeypatch):
+    monkeypatch.setattr(elev, "_SOURCES", {"usgs": lambda *a: (325.33, "usgs", "u")})
+    elev.elevation_ft(40.307, -75.148, ("usgs",))
+    _new_run()
+    monkeypatch.setattr(elev, "_SOURCES", {"openmeteo": lambda *a: (324.8, "openmeteo", "o")})
+    assert elev.elevation_ft(40.307, -75.148, ("openmeteo",))[1] == "openmeteo"
+
+
+def test_a_corrupt_cache_file_is_ignored(monkeypatch):
+    config.elevation_cache_path().write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(elev, "_SOURCES", {"usgs": lambda *a: (325.33, "usgs", "u")})
+    assert elev.elevation_ft(40.307, -75.148, ("usgs",))[0] == pytest.approx(325.33)
+    stored = json.loads(config.elevation_cache_path().read_text(encoding="utf-8"))
+    assert stored["entries"]["40.3070,-75.1480"]["source"] == "usgs"
+
+
+@pytest.mark.parametrize("value", ["0", "off", "false"])
+def test_the_disk_cache_can_be_switched_off(monkeypatch, tmp_path, value):
+    monkeypatch.setenv(config.ELEVATION_CACHE_ENV, value)
+    assert config.elevation_cache_path() is None
+    monkeypatch.setattr(elev, "_SOURCES", {"usgs": lambda *a: (325.33, "usgs", "u")})
+    elev.elevation_ft(40.307, -75.148, ("usgs",))
+    assert not list(tmp_path.iterdir())
+
+
+def test_the_default_cache_lives_in_the_users_cache_directory(monkeypatch, tmp_path):
+    monkeypatch.delenv(config.ELEVATION_CACHE_ENV)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    assert config.elevation_cache_path() == tmp_path / "barome" / "elevation.json"
 
 
 def test_the_choice_of_source_barely_matters():
