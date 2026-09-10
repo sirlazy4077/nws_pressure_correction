@@ -366,5 +366,7 @@ st.divider()
 st.caption(
     "A convenience calculator whose sources are always shown so you can verify them. "
     "Not a medical device, and it makes no clinical judgement — including on whether "
-    "any Ctp difference is acceptable."
+    "any Ctp difference is acceptable.  \n"
+    "Free software under the GNU AGPL-3.0: "
+    "[source code](https://github.com/sirlazy4077/nws_pressure_correction)."
 )
