@@ -253,3 +253,10 @@ python -m ruff check .
 A convenience calculator whose sources are always shown so you can verify them.
 No accounts, no stored results, no patient data of any kind, no tolerances or
 action levels, and no claim of medical-device or regulatory status.
+
+## License
+
+[GNU AGPL-3.0 or later](LICENSE). You may use, study, change and share it,
+including inside a for-profit clinic. If you distribute a modified version, or
+run one as a service others use over a network, you must publish its complete
+source under the same license.
