@@ -21,8 +21,12 @@ trust it.
 ```bash
 pip install -r requirements.txt
 
+# A contact email is required when you run it yourself (see below)
+export BAROME_CONTACT=you@example.org        # PowerShell: $env:BAROME_CONTACT = "you@example.org"
+
 # Command line
 python cli.py "123 Main St, Doylestown PA 18901"
+python cli.py --contact you@example.org "123 Main St, Doylestown PA 18901"
 python cli.py --pick "123 Main St, Doyle"      # confirm the address from a list
 python cli.py "123 Main St, Doylestown PA 18901" --temp 21.5 --trace
 python cli.py "123 Main St, Doylestown PA 18901" --temp 21.5 \
@@ -33,6 +37,40 @@ streamlit run web/app.py
 ```
 
 Run `python cli.py --help` for the full set of options.
+
+## Using it from your own script
+
+`barome` is an ordinary package; the CLI and web app are thin front ends over
+it. Install it with `pip install -e .` (or from git), then:
+
+```python
+from barome import BaromeError, pressure_for_address, set_contact, suggest
+
+set_contact("you@example.org")        # or set BAROME_CONTACT
+
+loc = suggest("123 Main St, Doylestown PA")[0]      # resolve the address once
+try:
+    r = pressure_for_address(loc.display_name, location=loc)
+except BaromeError as exc:
+    print("lookup failed:", exc)
+else:
+    print(r.pressure_station_mmhg, r.warnings)
+```
+
+**A contact email is required.** Nominatim's usage policy requires every
+request to identify who is making it, and that has to be you, not the author.
+With none set, the first call raises `ContactRequiredError` before anything is
+sent. The CLI asks for it at a terminal, and refuses to run unattended without
+one.
+
+**Elevation is cached between runs.** The first lookup for an address saves its
+elevation to `%LOCALAPPDATA%\barome\elevation.json` (Windows) or
+`~/.cache/barome/elevation.json`, so a script run every hour does not wait on
+USGS every hour. The ground does not move; the pressure is fetched fresh every
+time. Only an answer from the preferred source is saved: if USGS was down and
+Open-Meteo answered, that run uses Open-Meteo's value but the next run asks
+USGS again. The saved entry keeps its original source and URL, so the trace
+still shows where the number came from.
 
 ## What it does
 
@@ -122,7 +160,8 @@ matter which source answered.
 |---|---|
 | `WU_API_KEY` | Your own Weather Underground key. |
 | `BAROME_CTP_PROTOCOL` | Pin a house standard (`TG-51` / `TRS-398`). Suppresses the country auto-selection and says so on screen. |
-| `BAROME_CONTACT` | Contact address sent in the User-Agent (Nominatim's usage policy requires a genuine one). |
+| `BAROME_CONTACT` | **Required for local runs.** Your contact email, sent in the User-Agent (Nominatim's usage policy requires a genuine one). `--contact` or `barome.set_contact()` do the same. The web app reads it from its secrets and refuses to run without it. |
+| `BAROME_ELEVATION_CACHE` | Where the elevation cache file lives, or `0`/`off` to disable it. Default: your user cache directory. Off in the web app. |
 | `BAROME_HTTP_TIMEOUT` | Seconds. Default 12. |
 | `BAROME_USGS_TIMEOUT` | Seconds. Default 25 — USGS EPQS is reliably correct and reliably slow. |
 | `BAROME_SYSTEM_TRUST` | Set to `0` to verify TLS against Python's bundled CA list instead of the OS trust store. On by default. |
@@ -163,13 +202,20 @@ Streamlit's network rather than the clinic's.
    main file path **`web/app.py`**.
 3. Under **Advanced settings**, choose **Python 3.11 or newer**. The package
    uses `StrEnum` and `datetime.UTC`, both 3.11+.
-4. Still under Advanced settings, add any secrets in TOML form. All are
-   optional — the app runs with none:
+4. Still under Advanced settings, add the secrets in TOML form.
+   `BAROME_CONTACT` is required — the app shows a setup error without it; the
+   others are optional:
 
    ```toml
+   BAROME_CONTACT = "you@example.org"
    WU_API_KEY = "your-own-key"
    BAROME_CTP_PROTOCOL = "TG-51"
    ```
+
+   The contact is sent only in the User-Agent to the services the app queries
+   (Nominatim's policy requires it); it is never shown on the page and never
+   written in the repository. To run the web app locally, put the same line in
+   `.streamlit/secrets.toml`, which is git-ignored.
 
 5. Deploy. It installs from `requirements.txt` at the repo root.
 

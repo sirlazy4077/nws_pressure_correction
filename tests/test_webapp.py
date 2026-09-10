@@ -93,6 +93,38 @@ def app(monkeypatch):
     return at
 
 
+def test_the_operator_contact_comes_from_a_secret_not_the_source(app, monkeypatch):
+    from barome import config
+
+    monkeypatch.delenv(config.CONTACT_ENV)
+    monkeypatch.delenv(config.ELEVATION_CACHE_ENV)
+    app.secrets["BAROME_CONTACT"] = "operator@clinic.org"
+    app.run()
+    assert not app.exception
+    assert not app.error
+    assert config.contact_email() == "operator@clinic.org"
+    assert config.elevation_cache_path() is None
+
+
+def test_no_email_address_is_written_in_the_app_source():
+    """The repo is public: the operator's contact belongs in a secret."""
+    import re
+
+    source = Path(APP).read_text(encoding="utf-8")
+    assert re.search(r"[\w.+-]+@[\w-]+\.[\w.]+", source) is None
+
+
+def test_an_unconfigured_deployment_says_so_instead_of_running(app, monkeypatch):
+    from barome import config
+
+    monkeypatch.delenv(config.CONTACT_ENV)
+    app.run()
+    assert not app.exception
+    assert "BAROME_CONTACT" in app.error[0].value
+    assert not app.text_input  # stopped before the address box
+    assert app.calls == []
+
+
 def _find(at, address):
     """Type an address and press Find, stopping at the candidate list."""
     at.run()

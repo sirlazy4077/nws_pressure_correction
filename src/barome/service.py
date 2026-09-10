@@ -18,6 +18,7 @@ from .config import (
     PROVIDER_CHAIN,
     STALE_OBSERVATION_MINUTES,
     UNIT_MISMATCH_FRACTION,
+    contact_email,
     pinned_ctp_protocol,
 )
 from .errors import AllProvidersFailedError, ProviderError
@@ -104,6 +105,7 @@ def suggest_addresses(query: str, limit: int = geocode_mod.SUGGEST_LIMIT) -> lis
     than trusting that what they typed landed somewhere sensible. Each
     candidate can be handed straight back to `pressure_for_address(location=)`.
     """
+    contact_email()  # fail before the first request, not partway through
     return geocode_mod.suggest(query, limit)
 
 
@@ -125,7 +127,10 @@ def pressure_for_address(
     `geocode.suggest()`. A suggestion arrives fully resolved - Photon returns
     the coordinates and country with the candidate - so confirming one costs no
     second lookup, and a confirmed address cannot be the wrong place.
+
+    Raises ContactRequiredError before any request if no contact email is set.
     """
+    contact_email()
     trace: list[TraceStep] = []
     warnings: list[str] = []
     urls: dict[str, str] = {}
